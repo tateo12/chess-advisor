@@ -64,16 +64,22 @@ body {
 .board-stage { position: relative; }
 .board-frame {
   position: relative; padding: 14px; border-radius: 3px;
+  width: min(100%, 640px); margin-inline: auto;
   background: linear-gradient(160deg, #33251A, #241A12);
   box-shadow: 0 22px 50px rgba(0,0,0,.5), inset 0 0 0 1px rgba(212,165,55,.18);
 }
+.board-inner { position: relative; }
 .board {
-  position: relative; display: grid; grid-template-columns: repeat(8, 1fr);
+  /* Explicit rows AND columns keep squares square; container-type lets the
+     pieces scale off the board's own width instead of the viewport's. */
+  position: relative; display: grid;
+  grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
   aspect-ratio: 1; width: 100%; user-select: none; touch-action: manipulation;
+  container-type: inline-size;
 }
 .sq {
   position: relative; display: flex; align-items: center; justify-content: center;
-  font-size: clamp(26px, 7.2vw, 56px); line-height: 1; cursor: default;
+  font-size: 9.2cqi; line-height: 1; cursor: default;
   border: 0; padding: 0; background: none; font-family: inherit;
 }
 .sq.light { background: var(--sq-light); }
@@ -81,10 +87,10 @@ body {
 .sq.playable { cursor: pointer; }
 .sq:focus-visible { outline: 3px solid var(--brass); outline-offset: -3px; z-index: 4; }
 
-.pc { pointer-events: none; position: relative; z-index: 2; transition: transform .12s ease; }
+.pc { pointer-events: none; position: relative; z-index: 2; will-change: transform; }
 .pc.w { color: #FBF7EC; text-shadow: 0 0 1px #2A2A2A, 0 1px 0 #6B6155, 0 -1px 0 #2A2A2A, 1px 0 0 #2A2A2A, -1px 0 0 #2A2A2A; }
 .pc.b { color: #171717; text-shadow: 0 1px 0 rgba(255,255,255,.22); }
-.sq.playable:hover .pc { transform: translateY(-2px); }
+
 
 .sq.sel::after {
   content: ""; position: absolute; inset: 0; z-index: 1;
@@ -101,13 +107,13 @@ body {
 .sq.last { background-image: linear-gradient(rgba(212,165,55,.26), rgba(212,165,55,.26)); }
 .sq.incheck::after { content: ""; position: absolute; inset: 0; background: radial-gradient(circle, rgba(194,85,61,.75), transparent 68%); }
 
-.coord { position: absolute; font-family: var(--mono); font-size: 9px; opacity: .5; z-index: 3; }
+.coord { position: absolute; font-family: var(--mono); font-size: max(8px, 1.4cqi); opacity: .5; z-index: 3; }
 .coord.file { right: 3px; bottom: 1px; }
 .coord.rank { left: 3px; top: 1px; }
 .sq.light .coord { color: #55694F; }
 .sq.dark  .coord { color: #DCE7D6; }
 
-#arrows { position: absolute; inset: 14px; pointer-events: none; z-index: 5; }
+#arrows { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 
 /* ---------- right rail ---------- */
 .rail { display: flex; flex-direction: column; gap: 16px; }
@@ -181,6 +187,20 @@ button.btn.danger:hover { background: var(--rust); border-color: var(--rust); co
 .depth { display: flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 11px; color: #8FA396; margin-top: 13px; }
 .depth input { flex: 1; accent-color: var(--brass); }
 
+/* replay */
+.paste {
+  width: 100%; min-height: 84px; resize: vertical; background: #132119;
+  border: 1px solid var(--felt-edge); border-radius: 2px; color: var(--chalk);
+  font-family: var(--mono); font-size: 12px; line-height: 1.6; padding: 10px 11px;
+}
+.paste::placeholder { color: #5F7368; }
+.paste:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; border-color: var(--brass-dim); }
+.replay-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.replay-status { font-family: var(--mono); font-size: 11px; color: var(--brass-dim); margin-left: auto; }
+.replay-status.bad { color: var(--rust); }
+.scrub { height: 3px; background: #132119; border-radius: 99px; overflow: hidden; margin-top: 11px; }
+.scrub i { display: block; height: 100%; width: 0; background: var(--brass); transition: width .18s linear; }
+
 .saved { font-family: var(--mono); font-size: 10px; color: var(--brass-dim); letter-spacing: .1em; }
 
 /* promotion */
@@ -209,6 +229,7 @@ footer a { color: var(--brass-dim); }
   <div class="layout">
     <div class="board-stage">
       <div class="board-frame">
+        <div class="board-inner">
         <div class="board" id="board" role="grid" aria-label="Chess board"></div>
         <svg id="arrows" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           <defs>
@@ -218,6 +239,7 @@ footer a { color: var(--brass-dim); }
           </defs>
           <line id="rec-arrow" stroke="#D4A537" stroke-width="1.6" stroke-linecap="round" marker-end="url(#head)" opacity="0" />
         </svg>
+        </div>
       </div>
     </div>
 
@@ -249,6 +271,18 @@ footer a { color: var(--brass-dim); }
           </table>
           <div class="sheet-empty" id="sheet-empty">No moves yet. Move a piece on the board.</div>
         </div>
+      </section>
+
+      <section class="card">
+        <h2>Replay a game</h2>
+        <textarea class="paste" id="pgn-in" spellcheck="false"
+          placeholder="Paste a PGN or a move list&#10;1. e4 e5 2. Nf3 Nc6 3. Bb5 a6"></textarea>
+        <div class="replay-row">
+          <button class="btn" id="btn-replay">Replay</button>
+          <button class="btn" id="btn-stop" hidden>Stop</button>
+          <span class="replay-status" id="replay-status"></span>
+        </div>
+        <div class="scrub"><i id="scrub-fill"></i></div>
       </section>
 
       <section class="card">
@@ -294,6 +328,8 @@ let selected = null;
 let legalTargets = [];
 let lastMove = null;
 let reqToken = 0;
+let replayGen = 0;
+let replaying = false;
 
 const $ = (id) => document.getElementById(id);
 const boardEl = $('board');
@@ -418,6 +454,7 @@ function commit(from, to, promotion) {
   selected = null; legalTargets = [];
   save();
   render();
+  animateMove(move);
   drawArrow(null, null);
   askEngine();
 }
@@ -482,6 +519,85 @@ boardEl.addEventListener('pointerup', (e) => {
   if (needsPromotion(from, to)) askPromotion(from, to);
   else commit(from, to);
 });
+
+/** Slide the moved piece from where it came from. Runs after render(). */
+function animateMove(move) {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const fromCell = boardEl.querySelector(`[data-square="${move.from}"]`);
+  const toCell = boardEl.querySelector(`[data-square="${move.to}"]`);
+  const pc = toCell?.querySelector('.pc');
+  if (!fromCell || !toCell || !pc) return;
+  const a = fromCell.getBoundingClientRect(), b = toCell.getBoundingClientRect();
+  pc.style.transition = 'none';
+  pc.style.transform = `translate(${a.left - b.left}px, ${a.top - b.top}px)`;
+  pc.style.zIndex = '3';
+  requestAnimationFrame(() => {
+    pc.style.transition = 'transform .24s cubic-bezier(.32,.72,.36,1)';
+    pc.style.transform = 'translate(0, 0)';
+  });
+}
+
+/* ---------------- replay ---------------- */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Pull a move list out of whatever was pasted. Handles a full PGN with headers,
+ * and also a bare "1. e4 e5 2. Nf3" line, which loadPgn rejects.
+ * Returns { moves, rejected } so we can tell the user where it stopped.
+ */
+function parseMoves(text) {
+  const probe = new Chess();
+  try {
+    probe.loadPgn(text);
+    if (probe.history().length) return { moves: probe.history(), rejected: null };
+  } catch { /* fall through to the loose parser */ }
+
+  const cleaned = text
+    .replace(/^\s*\[[^\]]*\]\s*$/gm, ' ')   // headers
+    .replace(/\{[^}]*\}/g, ' ')                // { comments }
+    .replace(/\([^)]*\)/g, ' ')                // (variations)
+    .replace(/\$\d+/g, ' ')                    // $12 NAGs
+    .replace(/\b\d+\.(\.\.)?/g, ' ')           // 1.  12...
+    .replace(/\b(1-0|0-1|1\/2-1\/2|\*)\b/g, ' ');
+
+  const board = new Chess();
+  const moves = [];
+  for (const token of cleaned.split(/\s+/).filter(Boolean)) {
+    try { moves.push(board.move(token).san); }
+    catch { return { moves, rejected: token }; }
+  }
+  return { moves, rejected: null };
+}
+
+function setReplayUI(active) {
+  replaying = active;
+  $('btn-stop').hidden = !active;
+  $('btn-replay').disabled = active;
+  boardEl.style.pointerEvents = active ? 'none' : '';
+}
+
+async function replay(moves) {
+  const gen = ++replayGen;
+  setReplayUI(true);
+  chess.reset();
+  lastMove = null; selected = null; legalTargets = [];
+  drawArrow(null, null);
+  render();
+  $('rec-body').innerHTML = '<span class="thinking">replaying</span>';
+
+  for (let i = 0; i < moves.length; i++) {
+    await sleep(300);
+    if (gen !== replayGen) { setReplayUI(false); return; }   // stopped or restarted
+    try { lastMove = chess.move(moves[i]); } catch { break; }
+    render();
+    animateMove(lastMove);
+    $('scrub-fill').style.width = `${((i + 1) / moves.length) * 100}%`;
+    $('replay-status').textContent = `${i + 1} / ${moves.length}`;
+  }
+  setReplayUI(false);
+  save();
+  askEngine();
+}
 
 /* ---------------- status + scoresheet ---------------- */
 function outcome() {
@@ -631,6 +747,7 @@ async function askEngine() {
 
 /* ---------------- controls ---------------- */
 $('btn-undo').onclick = () => {
+  replayGen++; setReplayUI(false);
   if (!chess.history().length) return;
   chess.undo();
   lastMove = null;
@@ -639,11 +756,29 @@ $('btn-undo').onclick = () => {
 };
 $('btn-flip').onclick = () => { flipped = !flipped; save(); render(); askEngine(); };
 $('btn-new').onclick = () => {
+  replayGen++; setReplayUI(false);
   if (chess.history().length && !confirm('Start a new game? The current one will be cleared.')) return;
   chess.reset();
   lastMove = null; selected = null; legalTargets = [];
   save(); render(); askEngine();
 };
+$('btn-replay').onclick = () => {
+  const text = $('pgn-in').value.trim();
+  const status = $('replay-status');
+  status.className = 'replay-status';
+  if (!text) { status.textContent = 'Paste a game first'; status.className = 'replay-status bad'; return; }
+  const { moves, rejected } = parseMoves(text);
+  if (!moves.length) {
+    status.textContent = rejected ? `Couldn't read "${rejected}"` : "Couldn't read that";
+    status.className = 'replay-status bad';
+    return;
+  }
+  if (rejected) { status.textContent = `stopped at "${rejected}"`; status.className = 'replay-status bad'; }
+  $('scrub-fill').style.width = '0';
+  replay(moves);
+};
+$('btn-stop').onclick = () => { replayGen++; setReplayUI(false); save(); askEngine(); };
+
 $('depth').oninput = (e) => { $('depth-out').value = e.target.value; };
 $('depth').onchange = () => { save(); askEngine(); };
 $('promo-modal').onclick = (e) => { if (e.target.id === 'promo-modal') { e.currentTarget.hidden = true; clearSelection(); } };

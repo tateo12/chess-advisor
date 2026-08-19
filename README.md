@@ -8,6 +8,7 @@ here as each move happens, and the engine tells you what to play next.
 - Move pieces by tapping a piece then its destination, or by dragging.
 - The game is saved in your browser and survives a reload. It stays until you press **New game**.
 - The brass arrow is the engine's recommendation. Hover an alternative to see its arrow instead.
+- Paste a PGN or a bare move list into **Replay a game** to watch it play out, then get the best move in the final position.
 - **Depth** is the strength dial: ~12 is International Master, ~18 is Grandmaster. Higher takes longer.
 
 ## How it works
