@@ -303,7 +303,7 @@ footer a { color: var(--brass-dim); }
   </div>
 
   <footer>
-    Engine: <a href="https://chess-api.com/">chess-api.com</a> (Stockfish 18 NNUE). Rules: chess.js, bundled — nothing else leaves this page but the position itself.<br />
+    Engine: <a href="https://github.com/nmrugg/stockfish.js">Stockfish 18 NNUE</a>, running in this tab. Rules: chess.js. Both bundled — nothing leaves this page at all.<br />
     Depth 12 is roughly IM strength; 18 is roughly GM. Higher depth takes longer to answer.
   </footer>
 </div>
@@ -639,33 +639,130 @@ function renderSheet() {
 }
 
 /* ---------------- engine ---------------- */
-/** Candidate moves, best first. WebSocket only — POST collapses variants to one. */
-function candidates(fen, depth, mover, top = 3) {
+/**
+ * One long-lived Stockfish worker. Booting it fetches ~7 MB of wasm, so we boot
+ * once and reuse it for every position instead of paying that per move.
+ */
+let enginePromise = null;
+let engineReady = false;
+function engine() {
+  if (enginePromise) return enginePromise;
+  enginePromise = new Promise((resolve, reject) => {
+    let w;
+    try { w = new Worker('vendor/stockfish-18-lite-single.js'); } catch (e) { reject(e); return; }
+    // The glue sets its own onmessage before the wasm finishes compiling, so a
+    // single early 'uci' can land in the void. Re-ask until it answers.
+    const poke = setInterval(() => w.postMessage('uci'), 400);
+    const giveUp = setTimeout(() => {
+      clearInterval(poke);
+      w.removeEventListener('message', onBoot);
+      reject(new Error('the engine did not start'));
+    }, 60000);
+    const onBoot = (ev) => {
+      if (String(ev.data).trim() !== 'uciok') return;
+      clearInterval(poke); clearTimeout(giveUp);
+      w.removeEventListener('message', onBoot);
+      engineReady = true;
+      resolve(w);
+    };
+    w.addEventListener('message', onBoot);
+    w.onerror = () => { clearInterval(poke); clearTimeout(giveUp); reject(new Error('the engine failed to load')); };
+    w.postMessage('uci');
+  });
+  return enginePromise;
+}
+
+/**
+ * One `info ... multipv N ... score ... pv ...` line into a frame shaped like the
+ * old remote API's, so scoreFor/lineFor/setBar keep working untouched.
+ *
+ * The sign trap: UCI scores are from the MOVER's perspective, while the rest of
+ * this file was written against an API that always spoke from White's. Every
+ * score here gets flipped once, on the way in.
+ */
+function parseInfo(line, mover, fen) {
+  if (!line.startsWith('info ') || !line.includes(' multipv ') || !line.includes(' pv ')) return null;
+  const num = (key) => {
+    const m = line.match(new RegExp('\\b' + key + ' (-?\\d+)'));   // \b keeps 'depth' out of 'seldepth'
+    return m ? Number(m[1]) : null;
+  };
+  const rank = num('multipv');
+  const depth = num('depth');
+  const lans = line.slice(line.indexOf(' pv ') + 4).trim().split(/\s+/).filter(Boolean);
+  if (!rank || !depth || !lans.length) return null;
+
+  const toWhite = mover === 'w' ? 1 : -1;
+  const cp = num('score cp');
+  const mateIn = num('score mate');
+
+  // The engine speaks LAN; the sheet and the arrows want a real move object.
+  const probe = new Chess(fen);
+  let mv;
+  try { mv = probe.move({ from: lans[0].slice(0, 2), to: lans[0].slice(2, 4), promotion: lans[0][4] ?? 'q' }); }
+  catch { return null; }
+
+  const cpWhite = cp == null ? null : cp * toWhite;
+  const mateWhite = mateIn == null ? null : mateIn * toWhite;
+  return {
+    depth, rank, san: mv.san, from: mv.from, to: mv.to, promotion: mv.promotion,
+    eval: cpWhite == null ? (mateWhite > 0 ? 100 : -100) : cpWhite / 100,
+    mate: mateWhite,
+    continuationArr: lans.slice(1),
+    winChance: winChanceFor(cpWhite, mateWhite),
+  };
+}
+
+/**
+ * White's win chance, 0-100, for the evaluation bar.
+ *
+ * The remote API used to hand us `winChance` outright. A local engine only gives
+ * a centipawn score, so the curve is now ours to pick -- and it decides how the
+ * bar feels: too steep and a 30-centipawn opening edge slams it to one side, too
+ * flat and a genuinely winning endgame barely nudges it.
+ *
+ *   cpWhite    centipawns from WHITE's view, already sign-corrected (null if mating)
+ *   mateWhite  mate distance from WHITE's view, positive = White mates (null if not)
+ *
+ * Return a number from 0 (Black winning) to 100 (White winning).
+ */
+function winChanceFor(cpWhite, mateWhite) {
+  if (mateWhite != null) return mateWhite > 0 ? 100 : 0;   // a forced mate is not a probability
+  if (cpWhite == null) return 50;
+  // Lichess's constant: +100cp reads as ~59%, which keeps an opening edge honest
+  // instead of slamming the bar over. Clamped so a +30 rook can't overshoot.
+  const pct = 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cpWhite)) - 1);
+  return Math.max(0, Math.min(100, pct));
+}
+
+/** Candidate moves, best first. Local Stockfish over UCI -- no network, no queue. */
+async function candidates(fen, depth, mover, top = 3) {
+  const w = await engine();
   return new Promise((resolve, reject) => {
-    const frames = [];
-    let ws;
-    try { ws = new WebSocket('wss://chess-api.com/v1'); } catch (e) { reject(e); return; }
-    const finish = () => {
-      try { ws.close(); } catch {}
-      if (!frames.length) { reject(new Error('no reply')); return; }
-      const deepest = Math.max(...frames.map((f) => f.depth));
-      const seen = new Set();
-      resolve(frames
-        .filter((f) => f.depth === deepest)
-        .filter((f) => (seen.has(f.san) ? false : seen.add(f.san)))
-        // eval is ALWAYS White's perspective, so Black's best move is the lowest one.
-        .sort((a, b) => (mover === 'w' ? b.eval - a.eval : a.eval - b.eval))
-        .slice(0, top));
+    const byRank = new Map();               // multipv rank -> best frame seen at `deepest`
+    let deepest = 0;
+    const finish = (err) => {
+      clearTimeout(timer);
+      w.removeEventListener('message', onMsg);
+      if (err) { reject(err); return; }
+      // MultiPV rank 1 is already the mover's best line, so rank order IS strength
+      // order. No eval sort, and therefore no perspective bug to get wrong.
+      const picks = [...byRank.keys()].sort((a, b) => a - b).map((r) => byRank.get(r)).slice(0, top);
+      picks.length ? resolve(picks) : reject(new Error('no lines came back'));
     };
-    const timer = setTimeout(finish, 30000);
-    ws.onerror = () => { clearTimeout(timer); reject(new Error('connection failed')); };
-    ws.onopen = () => ws.send(JSON.stringify({ fen, depth, variants: top, maxThinkingTime: 100 }));
-    ws.onmessage = (ev) => {
-      let f; try { f = JSON.parse(ev.data); } catch { return; }
-      if (f.type === 'error') { clearTimeout(timer); try { ws.close(); } catch {} reject(new Error(f.text || f.error)); return; }
-      if (f.type === 'move' || f.type === 'bestmove') frames.push(f);
-      if (f.type === 'bestmove') { clearTimeout(timer); finish(); }
+    const timer = setTimeout(() => { try { w.postMessage('stop'); } catch {} finish(new Error('the search timed out')); }, 60000);
+    const onMsg = (ev) => {
+      const line = String(ev.data);
+      if (line.startsWith('bestmove')) { finish(null); return; }
+      const f = parseInfo(line, mover, fen);
+      if (!f) return;
+      if (f.depth > deepest) { deepest = f.depth; byRank.clear(); }   // deeper answer supersedes
+      if (f.depth === deepest) byRank.set(f.rank, f);
     };
+    w.addEventListener('message', onMsg);
+    w.postMessage('stop');                  // abandon whatever the last move started
+    w.postMessage(`setoption name MultiPV value ${top}`);
+    w.postMessage(`position fen ${fen}`);
+    w.postMessage(`go depth ${depth}`);
   });
 }
 
@@ -710,14 +807,17 @@ async function askEngine() {
     return;
   }
 
-  body.innerHTML = '<span class="thinking">reading the position</span>';
+  // First call pays a one-time 7 MB wasm load; say so rather than spinning silently.
+  body.innerHTML = engineReady
+    ? '<span class="thinking">reading the position</span>'
+    : '<span class="thinking">starting the engine (one-time 7 MB load)</span>';
   const mover = chess.turn();
   let picks;
   try {
     picks = await candidates(chess.fen(), Number($('depth').value), mover);
   } catch (err) {
     if (token !== reqToken) return;
-    body.innerHTML = `<div class="rec-line">Couldn't reach the engine — ${err.message}. The game is safe; move again or reload.</div>`;
+    body.innerHTML = `<div class="rec-line">The engine stalled — ${err.message}. The game is safe; move again or reload.</div>`;
     return;
   }
   if (token !== reqToken) return;                 // a newer move superseded this answer
