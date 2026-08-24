@@ -1166,7 +1166,15 @@ function readCell(px, w, gx, gy, step, bg, hi, lo) {
   // Drop coordinate labels and stray marks, then close the shape. On a low-contrast
   // board only the piece's own outline may have registered as ink; flood-filling it
   // is what turns that ring back into the solid silhouette the templates expect.
-  const sil = fillSilhouette(largestBlob(mask, size), size);
+  const blob = largestBlob(mask, size);
+  const filled = fillSilhouette(blob, size);
+  let filledArea = 0;
+  for (let i = 0; i < filled.length; i++) if (filled[i]) filledArea++;
+  // If the flood could not get in -- a piece that reaches every edge of its square,
+  // or ink smeared to the borders -- the "silhouette" is the whole square, and then
+  // every piece resembles whichever template is largest. That is how a board comes
+  // back as seventeen kings. Fall back to the raw blob, which still has a shape.
+  const sil = filledArea / (size * size) > 0.85 ? blob : filled;
   // Median brightness of the piece's core, with its outline eroded away. Which side
   // of white/black that lands on is decided later, across the whole board: a set's
   // "white" pieces can be darker than the board they stand on (chess.com's shaded
@@ -1624,6 +1632,9 @@ function previewShot(rawPlacement, turn, view) {
   lastMove = null; selected = null; legalTargets = [];
   render();
   $('rec-body').innerHTML = '<span class="thinking">check the board, then confirm</span>';
+  // A finished position is almost always a misread, and it also locks the board --
+  // you cannot move in a game that is over -- so say so rather than let it puzzle you.
+  return chess.isGameOver();
 }
 
 async function importImage(file) {
@@ -1646,13 +1657,14 @@ async function importImage(file) {
     replayGen++; setReplayUI(false);
     if (!shotPending) shotPending = { pgn: chess.pgn(), setup: setupFen };   // keep the first snapshot
     shotPending.placement = placement;
-    previewShot(placement, $('shot-turn').value, $('shot-view').value);
+    const finished = previewShot(placement, $('shot-turn').value, $('shot-view').value);
     showShotButtons(true);
     shotStatus(`read it (${theme} pieces) — confirm below`);
-    if (shaky.length) {
-      $('shot-warn').hidden = false;
-      $('shot-warn').textContent = `Unsure about ${shaky.join(', ')} (as drawn) — check those squares before using this.`;
-    }
+    const notes = [];
+    if (finished) notes.push('This reads as a finished game, which usually means a misread. Press Cancel to put your game back.');
+    if (shaky.length) notes.push(`Unsure about ${shaky.join(', ')} (as drawn) — check those squares before using this.`);
+    $('shot-warn').hidden = !notes.length;
+    $('shot-warn').textContent = notes.join(' ');
   } catch (err) {
     shotStatus(err.message, true);
   } finally {
