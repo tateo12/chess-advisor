@@ -1004,18 +1004,60 @@ function iou(a, b) {
 }
 
 /**
- * Name one piece within a given theme's set. Shape carries most of the signal;
- * size breaks the ties it cannot, since a pawn and a king differ in height.
+ * Score one piece against every type in a theme's set, best first. Shape carries
+ * most of the signal; size breaks the ties it cannot, since a pawn and a king
+ * differ in height.
  */
-function matchIn(set, o) {
-  const ranked = Object.entries(set)
+function rankTypes(set, o) {
+  return Object.entries(set)
     .map(([type, t]) => [type,
       iou(o.shape.mask, t.mask)
       - Math.abs(o.h - t.h) * 0.55
       - Math.abs(o.w - t.w) * 0.45
       - Math.abs(o.fill - t.f) * 0.35])
     .sort((a, b) => b[1] - a[1]);
-  return { type: ranked[0][0], score: ranked[0][1], margin: ranked[0][1] - ranked[1][1] };
+}
+
+/**
+ * Turn per-piece scores into a legal-looking position.
+ *
+ * Scoring each piece independently can produce a board of seventeen kings: when
+ * the silhouettes come out poorly, every one of them can happen to resemble the
+ * same template. A real position cannot look like that, and that knowledge is
+ * free -- so spend it. Exactly one king a side, and no pawns on the back ranks.
+ *
+ * The king is not simply the best king-score: it is the piece with the most to
+ * lose by being called anything else, which is the choice that costs the least
+ * total confidence across the board.
+ */
+function assignTypes(seen) {
+  const best = (o, banned) => o.ranked.find(([t]) => !banned.has(t)) || o.ranked[0];
+  const NO_KING = new Set(['k']);
+
+  for (const colour of ['w', 'b']) {
+    const mine = seen.filter((o) => o.color === colour);
+    if (!mine.length) continue;
+    const kingCost = (o) => {
+      const asKing = o.ranked.find(([t]) => t === 'k');
+      return (asKing ? asKing[1] : -Infinity) - best(o, NO_KING)[1];
+    };
+    const king = mine.reduce((a, b) => (kingCost(b) > kingCost(a) ? b : a));
+    for (const o of mine) {
+      if (o === king) { o.type = 'k'; o.margin = 1; continue; }
+      const [type, score] = best(o, NO_KING);
+      const runner = o.ranked.find(([t]) => t !== 'k' && t !== type);
+      o.type = type;
+      o.margin = runner ? score - runner[1] : 1;
+    }
+  }
+
+  // A pawn cannot stand on the first or last rank -- it would have promoted.
+  for (const o of seen) {
+    if (o.type !== 'p' || (o.r !== 0 && o.r !== 7)) continue;
+    const [type] = best(o, new Set(['k', 'p']));
+    o.type = type;
+    o.margin = 0;                        // forced, so flag it for review
+  }
 }
 
 /**
@@ -1209,6 +1251,7 @@ function readBoardImage(img) {
     for (let c = 0; c < 8; c++) {
       const cellBg = ringLuma(px, w, originX(c), originY(r), cs);
       const cell = readCell(px, w, originX(c), originY(r), cs, cellBg, hi, lo);
+      if (cell && !cell.empty) { cell.r = r; cell.c = c; }
       cells.push(cell && !cell.empty ? cell : null);
     }
   }
@@ -1224,11 +1267,12 @@ function readBoardImage(img) {
   // before: templates built from `neo` cannot name a `sky` king.
   let best = null;
   for (const [name, set] of Object.entries(themeTemplates())) {
-    const picks = seen.map((o) => matchIn(set, o));
-    const avg = picks.reduce((t, m) => t + m.score, 0) / picks.length;
-    if (!best || avg > best.avg) best = { name, avg, picks };
+    const ranks = seen.map((o) => rankTypes(set, o));
+    const avg = ranks.reduce((t, r) => t + r[0][1], 0) / ranks.length;
+    if (!best || avg > best.avg) best = { name, avg, ranks };
   }
-  seen.forEach((o, i) => { o.type = best.picks[i].type; o.margin = best.picks[i].margin; });
+  seen.forEach((o, i) => { o.ranked = best.ranks[i]; });
+  assignTypes(seen);
 
   const rows = [];
   const shaky = [];
