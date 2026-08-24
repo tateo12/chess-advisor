@@ -41,6 +41,39 @@ queues public requests and drops the socket at ~60s without ever answering — a
 of the swap the queue sat ~45 deep, so every move failed with "couldn't reach the engine."
 The engine now runs in the tab: depth 12 with three lines returns in well under a second.
 
+## Read a screenshot
+
+Drop a chess.com screenshot on the import card (or click it, or press Ctrl/Cmd+V) and
+the position is read off the image, shown on the board for you to check, and only then
+loaded. Everything runs in the tab -- no model, no API key, no upload.
+
+It is tuned for **chess.com's default piece set on mobile**. The six silhouettes are
+baked into the HTML as 32x32 bitmasks, 128 bytes each -- about 768 bytes total, matched
+against the real artwork rather than guessed from Unicode glyphs.
+
+How it works, in order:
+
+1. **Find the grid.** Column and row edge energy propose candidate `(start, step)` pairs;
+   each is then rescored on how *checkered* it actually is, which is what rejects the
+   surrounding app chrome. Steps are searched in half-pixels, because a board that fills
+   a 390px-wide screen has a cell size of 48.75.
+2. **Read twice.** The image is analysed at native size and again enlarged, and whichever
+   grid scores higher on checkeredness wins. A small screenshot leaves too few pixels per
+   square for the silhouettes to survive antialiasing.
+3. **Per cell:** ink is anything lighter than the light squares or darker than the dark
+   ones -- comparing against only *this* square loses a white piece on a light one. The
+   ink is flood-filled into a solid silhouette, which is both what the templates look like
+   and where the piece's real colour lives, clear of its own outlines.
+4. **Name it** by silhouette overlap, with height/width/fill as tie-breakers.
+
+Three things an image cannot tell you, so the UI asks instead of guessing: whose **turn**
+it is, which **side the board is drawn from** (chess.com puts your own colour at the
+bottom), and **castling rights** -- placement is geometry, castling is history. Anything
+the classifier was unsure about is listed so you can check it before confirming.
+
+Known limits: it expects chess.com's default pieces, and a photo of a physical wooden
+board is a different and much harder problem that this does not attempt.
+
 ## Credits and licensing
 
 Stockfish is **GPLv3**. `vendor/stockfish-18-lite-single.{js,wasm}` are unmodified build

@@ -215,6 +215,18 @@ button.btn.danger:hover { background: var(--rust); border-color: var(--rust); co
 footer { margin-top: 42px; padding-top: 18px; border-top: 1px solid var(--felt-edge); font-family: var(--mono); font-size: 11px; color: #6E8378; line-height: 1.8; }
 footer a { color: var(--brass-dim); }
 
+/* screenshot import */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.drop { border: 1px dashed var(--brass-dim); border-radius: 6px; padding: 14px; text-align: center;
+  font-family: var(--mono); font-size: 11px; color: var(--brass-dim); letter-spacing: .08em; cursor: pointer; }
+.drop:hover, .drop.over { border-color: var(--brass); color: var(--brass); }
+.drop input { display: none; }
+.shot-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.shot-status { font-family: var(--mono); font-size: 11px; color: var(--brass-dim); margin-left: auto; }
+.shot-status.bad { color: var(--rust); }
+.shot-row select { font-family: var(--mono); font-size: 11px; padding: 4px 6px; }
+.shot-warn { font-family: var(--mono); font-size: 11px; color: var(--rust); margin-top: 8px; }
+
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
 </head>
@@ -286,6 +298,29 @@ footer a { color: var(--brass-dim); }
       </section>
 
       <section class="card">
+        <h2>Read a screenshot</h2>
+        <label class="drop" id="shot-drop">
+          Drop a board image, click to pick one, or press Ctrl/Cmd+V
+          <input type="file" id="shot-file" accept="image/*" />
+        </label>
+        <div class="shot-row">
+          <label for="shot-turn" class="visually-hidden">Side to move</label>
+          <select id="shot-turn">
+            <option value="w">White to move</option>
+            <option value="b">Black to move</option>
+          </select>
+          <select id="shot-view">
+            <option value="w">Seen from White's side</option>
+            <option value="b">Seen from Black's side</option>
+          </select>
+          <button class="btn" id="shot-use" hidden>Use this position</button>
+          <button class="btn" id="shot-cancel" hidden>Cancel</button>
+          <span class="shot-status" id="shot-status"></span>
+        </div>
+        <p class="shot-warn" id="shot-warn" hidden></p>
+      </section>
+
+      <section class="card">
         <h2>Game</h2>
         <div class="controls">
           <button class="btn" id="btn-undo">Take back</button>
@@ -316,7 +351,7 @@ footer a { color: var(--brass-dim); }
 </div>
 
 <script type="module">
-import { Chess } from './vendor/chess.js';
+import { Chess, validateFen } from './vendor/chess.js';
 
 const GLYPH = { p:'♟', n:'♞', b:'♝', r:'♜', q:'♛', k:'♚' };
 const FILES = ['a','b','c','d','e','f','g','h'];
@@ -328,6 +363,7 @@ let selected = null;
 let legalTargets = [];
 let lastMove = null;
 let reqToken = 0;
+let setupFen = null;          // non-null when the game began from an imported position
 let replayGen = 0;
 let replaying = false;
 
@@ -338,7 +374,7 @@ const boardEl = $('board');
 function save() {
   try {
     localStorage.setItem(STORE, JSON.stringify({
-      moves: chess.history(), flipped, depth: $('depth').value,
+      moves: chess.history(), flipped, depth: $('depth').value, setup: setupFen,
     }));
   } catch { /* private mode — game just won't survive a reload */ }
 }
@@ -348,6 +384,11 @@ function restore() {
   if (!data) return;
   flipped = !!data.flipped;
   if (data.depth) { $('depth').value = data.depth; $('depth-out').value = data.depth; }
+  // A position read from a screenshot has no history to replay, so the board it
+  // started from has to be restored before the moves played since.
+  if (data.setup) {
+    try { chess.load(data.setup); setupFen = data.setup; } catch { return; }
+  }
   for (const san of data.moves ?? []) {
     try { lastMove = chess.move(san); } catch { break; }
   }
@@ -638,6 +679,384 @@ function renderSheet() {
   scroll.scrollTop = scroll.scrollHeight;
 }
 
+/* ---------------- screenshot import ---------------- */
+/**
+ * Reading a board out of a screenshot is three problems in a row: find the grid,
+ * decide which cells hold something, and name what is in them. All of it is plain
+ * pixel arithmetic -- no model, no API key, nothing leaves this page.
+ *
+ * This is tuned for *rendered* boards (Lichess, Chess.com, a PDF, a video call),
+ * which are axis-aligned and flat-coloured. A photo of a wooden board is a much
+ * harder problem and is not what this does.
+ */
+
+const SHOT_MAX = 900;         // downscale ceiling: bigger buys accuracy we don't need
+const NORM = 32;              // silhouettes are compared at 32x32
+
+/** Draw an image into a canvas, capped in size, and hand back raw RGBA. */
+function imagePixels(img, factor = 1) {
+  const base = Math.min(1, SHOT_MAX / Math.max(img.width, img.height));
+  const scale = Math.min(base * factor, 2200 / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width * scale));
+  const h = Math.max(1, Math.round(img.height * scale));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, w, h);
+  return { px: ctx.getImageData(0, 0, w, h).data, w, h };
+}
+
+const luma = (px, i) => 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+const median = (a) => { const s = Float64Array.from(a).sort(); return s[s.length >> 1]; };
+
+/** Edge energy per column (axis 'x') or row (axis 'y'). Grid lines read as spikes. */
+function edgeEnergy(px, w, h, axis) {
+  const n = axis === 'x' ? w : h;
+  const E = new Float64Array(n);
+  for (let a = 1; a < n; a++) {
+    let sum = 0;
+    const m = axis === 'x' ? h : w;
+    for (let b = 0; b < m; b++) {
+      const i  = axis === 'x' ? (b * w + a) * 4 : (a * w + b) * 4;
+      const j  = axis === 'x' ? (b * w + a - 1) * 4 : ((a - 1) * w + b) * 4;
+      sum += Math.abs(luma(px, i) - luma(px, j));
+    }
+    E[a] = sum / m;
+  }
+  return E;
+}
+
+/**
+ * Best few (start, step) pairs that lay 9 grid lines over the strongest edges.
+ * Every candidate scores exactly 9 terms, so no step size is structurally favoured.
+ */
+function gridCandidates(E, n, keep = 5) {
+  const found = [];
+  const at = (q) => (q >= 0 && q < n ? E[q] : 0);
+  // Half-pixel steps, because a board that fills its image has a fractional cell:
+  // 390 wide is 48.75 per square, and integer-only search cannot even represent it.
+  for (let step = 14; step <= n / 8; step += 0.5) {
+    const last = Math.round(step * 8);
+    for (let start = 0; start + last <= n; start++) {
+      let s = 0;
+      for (let i = 0; i <= 8; i++) {
+        const q = Math.round(start + i * step);           // tolerate a pixel of jitter
+        s += Math.max(at(q - 1), at(q), at(q + 1));
+      }
+      found.push([s, start, step]);
+    }
+  }
+  found.sort((a, b) => b[0] - a[0]);
+  const out = [];
+  for (const cand of found) {
+    if (out.some((o) => Math.abs(o[1] - cand[1]) < 8 && Math.abs(o[2] - cand[2]) < 4)) continue;
+    out.push(cand);
+    if (out.length >= keep) break;
+  }
+  return out;
+}
+
+/** Median luma of a cell's outer ring -- with a piece present, the ring is still board. */
+function ringLuma(px, w, x0, y0, size) {
+  const vals = [];
+  const band = Math.max(1, Math.round(size * 0.12));
+  for (let d = 0; d < size; d += 2) {
+    for (let t = 0; t < band; t += 2) {
+      vals.push(luma(px, ((y0 + t) * w + x0 + d) * 4));
+      vals.push(luma(px, ((y0 + size - 1 - t) * w + x0 + d) * 4));
+      vals.push(luma(px, ((y0 + d) * w + x0 + t) * 4));
+      vals.push(luma(px, ((y0 + d) * w + x0 + size - 1 - t) * 4));
+    }
+  }
+  return vals.length ? median(vals) : 0;
+}
+
+/**
+ * How much this grid actually looks like a chessboard: the two square colours must
+ * separate cleanly, and each colour must be consistent across its 32 cells. This is
+ * what stops us locking onto a table, a sidebar, or a nicely-spaced paragraph.
+ */
+function checkerScore(px, w, h, gx, gy, step) {
+  const cs = Math.round(step);
+  if (gx < 0 || gy < 0 || gx + step * 8 > w || gy + step * 8 > h) return -1;
+  const light = [], dark = [];
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const m = ringLuma(px, w, Math.round(gx + c * step), Math.round(gy + r * step), cs);
+      ((r + c) % 2 === 0 ? light : dark).push(m);
+    }
+  }
+  const ml = median(light), md = median(dark);
+  const spread = (a, m) => a.reduce((t, v) => t + Math.abs(v - m), 0) / a.length;
+  return Math.abs(ml - md) / (1 + spread(light, ml) + spread(dark, md));
+}
+
+/** Find the board: strongest edge grids, then rescored on how checkered they are. */
+function findBoard(px, w, h) {
+  const xs = gridCandidates(edgeEnergy(px, w, h, 'x'), w);
+  const ys = gridCandidates(edgeEnergy(px, w, h, 'y'), h);
+  let best = null;
+  for (const [, gx, sx] of xs) {
+    for (const [, gy, sy] of ys) {
+      if (Math.abs(sx - sy) > Math.max(2, sx * 0.06)) continue;   // cells must be square
+      const step = (sx + sy) / 2;
+      const score = checkerScore(px, w, h, gx, gy, step);
+      if (!best || score > best.score) best = { gx, gy, step, score };
+    }
+  }
+  return best && best.score > 1.2 ? best : null;
+}
+
+/** Crop a mask to its ink, scale it into NORM x NORM, and keep the aspect ratio --
+ *  proportion is exactly what separates a pawn from a queen. */
+function normalizeMask(mask, w, h) {
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (mask[y * w + x]) {
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  const out = new Uint8Array(NORM * NORM);
+  if (x1 < 0) return { mask: out, extent: 0 };
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+  const s = (NORM * 0.92) / Math.max(bw, bh);
+  const ox = (NORM - bw * s) / 2, oy = (NORM - bh * s) / 2;
+  for (let y = 0; y < NORM; y++) for (let x = 0; x < NORM; x++) {
+    const sx = Math.floor((x - ox) / s), sy = Math.floor((y - oy) / s);
+    if (sx >= 0 && sy >= 0 && sx < bw && sy < bh) out[y * NORM + x] = mask[(y0 + sy) * w + x0 + sx];
+  }
+  return { mask: out, extent: (bw * bh) / (w * h) };
+}
+
+/**
+ * chess.com's own piece silhouettes, baked in as 32x32 bitmasks (128 bytes each).
+ * Matching against the real artwork beats guessing from Unicode glyphs, and costs
+ * under a kilobyte of HTML -- no sprite files, no extra requests.
+ *   h / w / f = height, width and filled area as fractions of one square.
+ */
+const CC_TEMPLATES = {
+  p: { h: 0.6867, w: 0.5333, f: 0.2168, m: 'AAAAAAAAAAAAA+AAAA/4AAAP+AAAH/wAAD/8AAA//gAAP/4AAB/8AAAf/AAAD/gAAA/4AAA//gAAf/8AAD/+AAA//gAAB/AAAA/4AAAP+AAAD/gAAB/8AAA//gAA//+AAf//wAP//+AD///gB///4Af///AH///wB///8AAAAAA=' },
+  r: { h: 0.7467, w: 0.5867, f: 0.3309, m: 'AAAAAAAAAAAAA+AAAff3wAH398AB9/fAAf//wAH//8AB///AAf//wAD//4AA//+AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAH//AAB//wAA//+AAP//gAD//4AA//+AAf//wAP//+AH///wB///8Af///AH///wB///8AAAAAA=' },
+  n: { h: 0.8067, w: 0.68,   f: 0.3706, m: 'AAAAAAAAAAAADAAAAA8AAAAfgAAAH/AAAD/8AAB//wAA//+AAP//gAD//8AB///AAf//4AP//+AH///gB///8A/+//AP/P/wB+H/8APD//AAB//gAA//4AAf/+AAP//gAD//wAB//+AA///wAf//+AH///gB///4Af//+AAAAAA=' },
+  b: { h: 0.8233, w: 0.59,   f: 0.3109, m: 'AAAAAAAAAAAAA8AAAAfgAAAH4AAAB+AAAAPgAAAHwAAAH5gAAB+cAAA/vgAAfz8AAH8/AAB/PwAA/3+AAP9/gAD/f4AA//+AAP//gAD//4AA//+AAH//AAB//wAAP/8AAD/+AAH//8AD///gA///4AP//+AD///gA///4AAAAAA=' },
+  q: { h: 0.8,    w: 0.7933, f: 0.4124, m: 'AAAAAAAAAAAAPB4AAH4/AAB/fwAAf38AAH4/AAA+PgAfHjx8Pz48fj+/fv4/v37+Pz9+fh+//vwH///wB///8Af///AD///gA///4AH//8AB///AAP//gAD//4AA//+AAH//AAH//8AD///gA///4AP//+AD///gA///4AAAAAA=' },
+  k: { h: 0.8333, w: 0.78,   f: 0.4243, m: 'AAAAAAAAAAAAA+AAAAPgAAAP+AAAD/gAAA/4AAAP+AAAD/gAAfPnwAf///AP///4H///+B////wf///8H8fx/B+H8fwfx/H8H+fz/A/39/gP///4B///8AP//+AB///AAP//gAD//4AB///AA///4AP//+AD///gA///4AAAAAA=' },
+};
+
+let tplCache = null;
+function templates() {
+  if (tplCache) return tplCache;
+  tplCache = {};
+  for (const [type, t] of Object.entries(CC_TEMPLATES)) {
+    const bytes = atob(t.m);
+    const mask = new Uint8Array(NORM * NORM);
+    for (let i = 0; i < mask.length; i++) {
+      mask[i] = (bytes.charCodeAt(i >> 3) >> (7 - (i & 7))) & 1;
+    }
+    tplCache[type] = { ...t, mask };
+  }
+  return tplCache;
+}
+
+/** Intersection over union of two normalised silhouettes. */
+function iou(a, b) {
+  let inter = 0, union = 0;
+  for (let i = 0; i < a.length; i++) { const x = a[i], y = b[i]; if (x & y) inter++; if (x | y) union++; }
+  return union ? inter / union : 0;
+}
+
+/**
+ * Name a piece from its silhouette, with size as a tie-breaker.
+ *
+ * Shape carries most of the signal, but chess.com's set also varies in size -- a
+ * pawn stands 0.69 of a square, a king 0.83 -- which is what separates the pairs
+ * that silhouettes alone confuse. h/w/fill are all fractions of one square.
+ */
+function matchType(shape, h, w, fill) {
+  const ranked = Object.entries(templates())
+    .map(([type, t]) => [type,
+      iou(shape.mask, t.mask)
+      - Math.abs(h - t.h) * 0.55
+      - Math.abs(w - t.w) * 0.45
+      - Math.abs(fill - t.f) * 0.35])
+    .sort((a, b) => b[1] - a[1]);
+  return { type: ranked[0][0], score: ranked[0][1], margin: ranked[0][1] - ranked[1][1] };
+}
+
+/**
+ * Flood the background inwards from the cell's border; anything the flood cannot
+ * reach is inside the piece. This turns an outline-plus-interior-detail ink map
+ * into one solid silhouette -- which is both what our filled glyph templates look
+ * like, and where the piece's real colour lives, away from its own linework.
+ */
+function fillSilhouette(mask, size) {
+  const seen = new Uint8Array(size * size);
+  const stack = [];
+  const push = (i) => { if (!mask[i] && !seen[i]) { seen[i] = 1; stack.push(i); } };
+  for (let i = 0; i < size; i++) {
+    push(i); push((size - 1) * size + i); push(i * size); push(i * size + size - 1);
+  }
+  while (stack.length) {
+    const i = stack.pop(), x = i % size, y = (i / size) | 0;
+    if (x > 0) push(i - 1);
+    if (x < size - 1) push(i + 1);
+    if (y > 0) push(i - size);
+    if (y < size - 1) push(i + size);
+  }
+  const sil = new Uint8Array(size * size);
+  for (let i = 0; i < sil.length; i++) sil[i] = (mask[i] || !seen[i]) ? 1 : 0;
+  return sil;
+}
+
+/** Erode a silhouette down to its core, so outlines stop voting on the colour. */
+function erodeCore(sil, size) {
+  let cur = sil, count = 0;
+  const passes = Math.max(2, Math.round(size * 0.12));
+  for (let k = 0; k < passes; k++) {
+    const next = new Uint8Array(size * size);
+    let n = 0;
+    for (let y = 1; y < size - 1; y++) {
+      for (let x = 1; x < size - 1; x++) {
+        const i = y * size + x;
+        if (cur[i] && cur[i - 1] && cur[i + 1] && cur[i - size] && cur[i + size]) { next[i] = 1; n++; }
+      }
+    }
+    if (!n) break;                       // eroded away entirely; keep what we had
+    cur = next; count = n;
+  }
+  return { mask: cur, count };
+}
+
+function readCell(px, w, gx, gy, step, bg, hi, lo) {
+  // Only 3% inset: a chess.com king stands 0.83 of a square tall, so the old 13%
+  // sliced the crown off and wrecked the silhouette it was about to be judged on.
+  const inset = Math.round(step * 0.03);
+  const size = step - inset * 2;
+  if (size < 8) return null;
+  const L = new Float64Array(size * size);
+  const mask = new Uint8Array(size * size);
+  let ink = 0;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const v = luma(px, ((gy + inset + y) * w + gx + inset + x) * 4);
+      const i = y * size + x;
+      L[i] = v;
+      // Ink contrasts with BOTH square colours; comparing only against this square
+      // loses a white piece on a light one (#fff vs #eeeed2 is 19 luma apart). The
+      // per-cell term uses this cell's own shade, so move highlights read as board.
+      if (v > hi + 8 || v < lo - 8 || Math.abs(v - bg) > 45) { mask[i] = 1; ink++; }
+    }
+  }
+  if (ink / (size * size) < 0.05) return { empty: true };
+
+  const sil = fillSilhouette(mask, size);
+  const core = erodeCore(sil, size);
+  const vote = core.count ? core.mask : sil;
+  const mid = (hi + lo) / 2;
+  let bright = 0, dark = 0;
+  for (let i = 0; i < vote.length; i++) if (vote[i]) (L[i] > mid ? bright++ : dark++);
+
+  let x0 = size, y0 = size, x1 = -1, y1 = -1, area = 0;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (sil[y * size + x]) {
+    area++;
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  const { type, margin } = matchType(
+    normalizeMask(sil, size, size),
+    (y1 - y0 + 1) / step, (x1 - x0 + 1) / step, area / (step * step));
+
+  return { empty: false, color: bright > dark ? 'w' : 'b', type, margin };
+}
+
+/** Locate the board at a given scale. */
+function analyse(img, factor) {
+  const { px, w, h } = imagePixels(img, factor);
+  const found = findBoard(px, w, h);
+  return found ? { px, w, h, ...found } : null;
+}
+
+/** Whole pipeline: image -> { placement, shaky } or a thrown reason. */
+function readBoardImage(img) {
+  // Read at native size, then again enlarged, and keep whichever grid the image
+  // agrees with most -- the checker score is comparable across scales, and it is a
+  // far better judge than the first pass's own step size. A 390-wide screenshot
+  // leaves ~49px per square, where antialiasing eats the silhouette detail; the
+  // first pass can also lock onto surrounding app chrome and report a bogus step,
+  // which is why the rescale must not be gated on that step being small.
+  const tries = [analyse(img, 1)];
+  const want = 90;
+  if (tries[0] && tries[0].step < want) tries.push(analyse(img, Math.min(3, want / tries[0].step)));
+  if (!tries[0]) tries.push(analyse(img, 2));
+  const a = tries.filter(Boolean).sort((x, y) => y.score - x.score)[0];
+  if (!a) throw new Error('no chessboard grid found in that image');
+  const { px, w, gx, gy, step } = a;
+
+  const cs = Math.round(step);
+  const originX = (c) => Math.round(gx + c * step);
+  const originY = (r) => Math.round(gy + r * step);
+  const parity = [[], []];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++)
+    parity[(r + c) % 2].push(ringLuma(px, w, originX(c), originY(r), cs));
+  const bg = [median(parity[0]), median(parity[1])];
+  const hi = Math.max(bg[0], bg[1]), lo = Math.min(bg[0], bg[1]);
+
+  const rows = [];
+  const shaky = [];
+  for (let r = 0; r < 8; r++) {
+    let row = '';
+    let gap = 0;
+    for (let c = 0; c < 8; c++) {
+      const cellBg = ringLuma(px, w, originX(c), originY(r), cs);
+      const cell = readCell(px, w, originX(c), originY(r), cs, cellBg, hi, lo);
+      if (!cell || cell.empty) { gap++; continue; }
+      if (gap) { row += gap; gap = 0; }
+      row += cell.color === 'w' ? cell.type.toUpperCase() : cell.type;
+      if (cell.margin < 0.05) shaky.push(FILES[c] + (8 - r));    // near-tie between types
+    }
+    if (gap) row += gap;
+    rows.push(row);
+  }
+  return { placement: rows.join('/'), shaky };
+}
+
+/**
+ * A board screenshotted from Black's side holds the same position rotated 180
+ * degrees. Nothing in the pixels says which way round it is -- chess.com draws
+ * your own colour at the bottom -- so this is the viewer's call, not a guess.
+ */
+function rotatePlacement(placement) {
+  const spread = (row) => [...row].map((ch) => (/\d/.test(ch) ? '.'.repeat(Number(ch)) : ch)).join('');
+  const pack = (row) => {
+    let out = '', gap = 0;
+    for (const ch of row) {
+      if (ch === '.') { gap++; continue; }
+      if (gap) { out += gap; gap = 0; }
+      out += ch;
+    }
+    return out + (gap || '');
+  };
+  return placement.split('/').map(spread).reverse()
+    .map((row) => pack([...row].reverse().join('')))
+    .join('/');
+}
+
+/**
+ * Castling rights, which a screenshot physically cannot show.
+ *
+ * A picture gives you piece placement and nothing else -- not whose turn it is, not
+ * whether that king has already moved and come back. Placement is geometry; castling
+ * is history. So this has to be a judgement call, and it cuts both ways: grant rights
+ * the position doesn't really have and the engine may recommend an illegal castle,
+ * withhold rights it does have and you never get told about a good one.
+ *
+ *   placement  the board half of a FEN, e.g. "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+ *
+ * Return a FEN castling field: some combination of "KQkq", or "-" for none.
+ */
+function inferCastling(placement) {
+  // TODO(human)
+}
+
 /* ---------------- engine ---------------- */
 /**
  * One long-lived Stockfish worker. Booting it fetches ~7 MB of wasm, so we boot
@@ -858,6 +1277,7 @@ $('btn-flip').onclick = () => { flipped = !flipped; save(); render(); askEngine(
 $('btn-new').onclick = () => {
   replayGen++; setReplayUI(false);
   if (chess.history().length && !confirm('Start a new game? The current one will be cleared.')) return;
+  setupFen = null;
   chess.reset();
   lastMove = null; selected = null; legalTargets = [];
   save(); render(); askEngine();
@@ -884,6 +1304,122 @@ $('depth').onchange = () => { save(); askEngine(); };
 $('promo-modal').onclick = (e) => { if (e.target.id === 'promo-modal') { e.currentTarget.hidden = true; clearSelection(); } };
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { $('promo-modal').hidden = true; clearSelection(); }
+});
+
+/* ---------------- screenshot controls ---------------- */
+let shotPending = null;
+
+function shotStatus(text, bad = false) {
+  const el = $('shot-status');
+  el.textContent = text;
+  el.className = 'shot-status' + (bad ? ' bad' : '');
+}
+
+function showShotButtons(on) { $('shot-use').hidden = !on; $('shot-cancel').hidden = !on; }
+
+/** Placement plus the fields an image cannot carry. */
+function shotFen(placement, turn) {
+  return `${placement} ${turn} ${inferCastling(placement) || '-'} - 0 1`;
+}
+
+/** Put a detected position on the board WITHOUT committing it, so it can be eyeballed. */
+function previewShot(rawPlacement, turn, view) {
+  const placement = view === 'b' ? rotatePlacement(rawPlacement) : rawPlacement;
+  const fen = shotFen(placement, turn);
+  const check = validateFen(fen);
+  if (!check.ok) throw new Error(check.error || 'that position is not legal');
+  chess.load(fen);
+  lastMove = null; selected = null; legalTargets = [];
+  render();
+  $('rec-body').innerHTML = '<span class="thinking">check the board, then confirm</span>';
+}
+
+async function importImage(file) {
+  if (!file || !file.type.startsWith('image/')) { shotStatus('that is not an image', true); return; }
+  shotStatus('reading…');
+  $('shot-warn').hidden = true;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    await new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = () => rej(new Error('could not decode that image'));
+      img.src = url;
+    });
+    const { placement, shaky } = readBoardImage(img);
+    const kings = { w: (placement.match(/K/g) || []).length, b: (placement.match(/k/g) || []).length };
+    if (kings.w !== 1 || kings.b !== 1) {
+      throw new Error(`read ${kings.w} white and ${kings.b} black kings — that's a misread`);
+    }
+    replayGen++; setReplayUI(false);
+    if (!shotPending) shotPending = { pgn: chess.pgn(), setup: setupFen };   // keep the first snapshot
+    shotPending.placement = placement;
+    previewShot(placement, $('shot-turn').value, $('shot-view').value);
+    showShotButtons(true);
+    shotStatus('read it — confirm below');
+    if (shaky.length) {
+      $('shot-warn').hidden = false;
+      $('shot-warn').textContent = `Unsure about ${shaky.join(', ')} (as drawn) — check those squares before using this.`;
+    }
+  } catch (err) {
+    shotStatus(err.message, true);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+$('shot-file').onchange = (e) => { const f = e.target.files?.[0]; if (f) importImage(f); e.target.value = ''; };
+const rePreview = () => {
+  if (!shotPending?.placement) return;
+  try {
+    previewShot(shotPending.placement, $('shot-turn').value, $('shot-view').value);
+    shotStatus('read it — confirm below');
+  } catch (err) { shotStatus(err.message, true); }
+};
+$('shot-turn').onchange = rePreview;
+$('shot-view').onchange = rePreview;
+
+$('shot-use').onclick = () => {
+  if (!shotPending) return;
+  setupFen = chess.fen();            // this board is now the game's origin
+  shotPending = null;
+  showShotButtons(false);
+  shotStatus('position loaded');
+  save(); render(); askEngine();
+};
+
+$('shot-cancel').onclick = () => {
+  if (!shotPending) return;
+  const { pgn, setup } = shotPending;
+  chess.reset();
+  setupFen = setup;
+  try {
+    if (setup) chess.load(setup);
+    if (pgn.trim()) chess.loadPgn(pgn);
+  } catch { /* nothing sane to go back to; the reset stands */ }
+  shotPending = null;
+  lastMove = null; selected = null; legalTargets = [];
+  showShotButtons(false);
+  shotStatus('cancelled');
+  $('shot-warn').hidden = true;
+  render(); askEngine();
+};
+
+const shotDrop = $('shot-drop');
+for (const t of ['dragenter', 'dragover']) {
+  shotDrop.addEventListener(t, (e) => { e.preventDefault(); shotDrop.classList.add('over'); });
+}
+for (const t of ['dragleave', 'drop']) {
+  shotDrop.addEventListener(t, (e) => { e.preventDefault(); shotDrop.classList.remove('over'); });
+}
+shotDrop.addEventListener('drop', (e) => { const f = e.dataTransfer?.files?.[0]; if (f) importImage(f); });
+
+document.addEventListener('paste', (e) => {
+  if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;  // let the PGN box paste text
+  const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith('image/'));
+  if (!item) return;
+  e.preventDefault();
+  importImage(item.getAsFile());
 });
 
 restore();
