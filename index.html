@@ -828,31 +828,170 @@ function normalizeMask(mask, w, h) {
 }
 
 /**
- * chess.com's own piece silhouettes, baked in as 32x32 bitmasks (128 bytes each).
- * Matching against the real artwork beats guessing from Unicode glyphs, and costs
- * under a kilobyte of HTML -- no sprite files, no extra requests.
+ * chess.com's piece silhouettes, one set per theme, as 32x32 bitmasks (128 bytes
+ * each). Matching real artwork beats guessing from Unicode glyphs, and every theme
+ * together still costs less than 25 KB of HTML -- no sprite files, no requests.
+ * Which theme a screenshot uses is worked out from the screenshot itself.
  *   h / w / f = height, width and filled area as fractions of one square.
  */
-const CC_TEMPLATES = {
-  p: { h: 0.6867, w: 0.5333, f: 0.2168, m: 'AAAAAAAAAAAAA+AAAA/4AAAP+AAAH/wAAD/8AAA//gAAP/4AAB/8AAAf/AAAD/gAAA/4AAA//gAAf/8AAD/+AAA//gAAB/AAAA/4AAAP+AAAD/gAAB/8AAA//gAA//+AAf//wAP//+AD///gB///4Af///AH///wB///8AAAAAA=' },
-  r: { h: 0.7467, w: 0.5867, f: 0.3309, m: 'AAAAAAAAAAAAA+AAAff3wAH398AB9/fAAf//wAH//8AB///AAf//wAD//4AA//+AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAH//AAB//wAA//+AAP//gAD//4AA//+AAf//wAP//+AH///wB///8Af///AH///wB///8AAAAAA=' },
-  n: { h: 0.8067, w: 0.68,   f: 0.3706, m: 'AAAAAAAAAAAADAAAAA8AAAAfgAAAH/AAAD/8AAB//wAA//+AAP//gAD//8AB///AAf//4AP//+AH///gB///8A/+//AP/P/wB+H/8APD//AAB//gAA//4AAf/+AAP//gAD//wAB//+AA///wAf//+AH///gB///4Af//+AAAAAA=' },
-  b: { h: 0.8233, w: 0.59,   f: 0.3109, m: 'AAAAAAAAAAAAA8AAAAfgAAAH4AAAB+AAAAPgAAAHwAAAH5gAAB+cAAA/vgAAfz8AAH8/AAB/PwAA/3+AAP9/gAD/f4AA//+AAP//gAD//4AA//+AAH//AAB//wAAP/8AAD/+AAH//8AD///gA///4AP//+AD///gA///4AAAAAA=' },
-  q: { h: 0.8,    w: 0.7933, f: 0.4124, m: 'AAAAAAAAAAAAPB4AAH4/AAB/fwAAf38AAH4/AAA+PgAfHjx8Pz48fj+/fv4/v37+Pz9+fh+//vwH///wB///8Af///AD///gA///4AH//8AB///AAP//gAD//4AA//+AAH//AAH//8AD///gA///4AP//+AD///gA///4AAAAAA=' },
-  k: { h: 0.8333, w: 0.78,   f: 0.4243, m: 'AAAAAAAAAAAAA+AAAAPgAAAP+AAAD/gAAA/4AAAP+AAAD/gAAfPnwAf///AP///4H///+B////wf///8H8fx/B+H8fwfx/H8H+fz/A/39/gP///4B///8AP//+AB///AAP//gAD//4AB///AA///4AP//+AD///gA///4AAAAAA=' },
+const CC_THEMES = {
+  'neo': {
+    p: { h: 0.687, w: 0.533, f: 0.217, m: 'AAAAAAAAAAAAA+AAAA/4AAAP+AAAH/wAAD/8AAA//gAAP/4AAB/8AAAf/AAAD/gAAA/4AAA//gAAf/8AAD/+AAA//gAAB/AAAA/4AAAP+AAAD/gAAB/8AAA//gAA//+AAf//wAP//+AD///gB///4Af///AH///wB///8AAAAAA=' },
+    r: { h: 0.747, w: 0.587, f: 0.331, m: 'AAAAAAAAAAAAA+AAAff3wAH398AB9/fAAf//wAH//8AB///AAf//wAD//4AA//+AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAH//AAB//wAA//+AAP//gAD//4AA//+AAf//wAP//+AH///wB///8Af///AH///wB///8AAAAAA=' },
+    n: { h: 0.807, w: 0.68, f: 0.371, m: 'AAAAAAAAAAAADAAAAA8AAAAfgAAAH/AAAD/8AAB//wAA//+AAP//gAD//8AB///AAf//4AP//+AH///gB///8A/+//AP/P/wB+H/8APD//AAB//gAA//4AAf/+AAP//gAD//wAB//+AA///wAf//+AH///gB///4Af//+AAAAAA=' },
+    b: { h: 0.823, w: 0.59, f: 0.311, m: 'AAAAAAAAAAAAA8AAAAfgAAAH4AAAB+AAAAPgAAAHwAAAH5gAAB+cAAA/vgAAfz8AAH8/AAB/PwAA/3+AAP9/gAD/f4AA//+AAP//gAD//4AA//+AAH//AAB//wAAP/8AAD/+AAH//8AD///gA///4AP//+AD///gA///4AAAAAA=' },
+    q: { h: 0.8, w: 0.793, f: 0.412, m: 'AAAAAAAAAAAAPB4AAH4/AAB/fwAAf38AAH4/AAA+PgAfHjx8Pz48fj+/fv4/v37+Pz9+fh+//vwH///wB///8Af///AD///gA///4AH//8AB///AAP//gAD//4AA//+AAH//AAH//8AD///gA///4AP//+AD///gA///4AAAAAA=' },
+    k: { h: 0.833, w: 0.78, f: 0.424, m: 'AAAAAAAAAAAAA+AAAAPgAAAP+AAAD/gAAA/4AAAP+AAAD/gAAfPnwAf///AP///4H///+B////wf///8H8fx/B+H8fwfx/H8H+fz/A/39/gP///4B///8AP//+AB///AAP//gAD//4AB///AA///4AP//+AD///gA///4AAAAAA=' }
+  },
+  'sky': {
+    p: { h: 0.807, w: 0.68, f: 0.299, m: 'AAAAAAAAAAAAA+AAAA/4AAAf/AAAH/wAAB/8AAAf/AAAH/wAAB/8AAAf/AAAD/gAAD/+AAB//wAAf/8AAD/+AAAf/AAAD/gAAA/4AAAP+AAAH/wAAD/+AAB//wAA//8AAP//gAD//4AD///gB///8A////AP///4D///+AAAAAA=' },
+    r: { h: 0.803, w: 0.68, f: 0.402, m: 'AAAAAAAAAAAB8+fAA/Pn4APz5+AD///gA///4AP//+AD///gA///4AH//8AA//+AAH//AAB//wAA//8AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AD///gB///8A////gP///4D///+AAAAAA=' },
+    n: { h: 0.847, w: 0.683, f: 0.426, m: 'AAAAAAAAAAAAHwAAAB/gAAAf+AAAP/8AAD//AAB//wAAf/8AAP//wAH//8AD///AB///wAf//8AH///gB+H/4Afj//ABw//wAA//4AAf/8AAP//AAP//wAD//+AB///wAf//4AH//8AA//+AA///4Af///AH///wB///8AAAAAA=' },
+    b: { h: 0.847, w: 0.82, f: 0.342, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAHAAAAH8AAAD/gAAB/8AAA//gAAf/8AAH//AAD//4AA//+AAP//gAD//4AA//+AAP//gAB//wAAf/8AAD/+AAB//wAAf/8AAD/+AAAf/AAAD/gAH///+B////w//3/+P/4//gAAAAA=' },
+    q: { h: 0.887, w: 0.773, f: 0.393, m: 'AAAAAAAAAAAAAcAAAAPgAABD4QAA8+eAAfHHgAHxx4AA8ceAADHGAA45zjgPOc54DznOeA893PgDn/zgAf//wAH//8AA//+AAP//gAB//wAAf/8AAD/+AAA//gAAP/4AAH//AAB//wAAP/4AA///4AP//+AH///wB///8AAAAAA=' },
+    k: { h: 0.907, w: 0.693, f: 0.407, m: 'AAAAAAAAAAAAAcAAAAfwAAAH8AAAB/AAAAfwAAABwAAAP/4AAf//wAP//+AH///wA///4AP//8AB///AAf//gAD//4AA//+AAH//AAB//gAAP/4AAD/+AAA//gAAP/4AAD/+AAB//gAAP/4AAf//wAP//+AH///gB///8AAAAAA=' }
+  },
+  'classic': {
+    p: { h: 0.733, w: 0.573, f: 0.264, m: 'AAAAAAAAAAAAA+AAAAfwAAAH8AAAD/AAAA/wAAAH8AAAB/AAAB/4AAA//AAAP/4AAH/+AAB//gAAf/4AAD/+AAA//AAAH/wAAB/8AAB//wAA//+AAf//wAH//8AD///gA///4AP//+AH///wB///8Af///AH///wB///4AAAAAA=' },
+    r: { h: 0.747, w: 0.647, f: 0.349, m: 'AAAAAAAAAAAD4+PgA+Pj4AP//+AD///gA///4AP//+AD///gAf//wAD//4AAP/8AAD/+AAA//gAAP/4AAD/+AAA//gAAP/4AAD/+AAA//gAAP/4AAP//gAH//8AD///gA///4AP//+AD///gD///+A////gP///4D///+AAAAAA=' },
+    n: { h: 0.807, w: 0.813, f: 0.443, m: 'AAAAAAAAAAAAgwAAAOcAAAD3gAAA/+AAAP/8AAD//gAB//8AA///gAP//8AD///gB///4Af///AP///4D///+B////gf///8P////D/8//w/8P/8P8H//D/D//4fh//+A4///gAf//4AH//+AD///gA///4AP//+AD///gAAAAA=' },
+    b: { h: 0.813, w: 0.8, f: 0.287, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAPAAAAH8AAAD/gAAD/8AAB//gAAf/8AAP//AAD//wAA//8AAH//AAB//wAAP/4AAD/+AAAf/AAAH/wAAB/8AAA//gAAP/4AAD/+AAAH8AAPj/j4P////h////wf/3/8HBgMHAAAAAA=' },
+    q: { h: 0.807, w: 0.853, f: 0.374, m: 'AAAAAAAAAAAAAAAAAAHAAADz54AA88eAGPCHnDxggx48IIIePDHGHggxxggMMcYQBjnOMAY7zjAHf/5wB3/+cAf//vAH///wB///4AP//+AD///gAf//wAH//8AA//+AAP//gAD//4AA//+AAf//wAH//8AAf/8AAAAAAAAAAAA=' },
+    k: { h: 0.807, w: 0.783, f: 0.374, m: 'AAAAAAAAAAAAAIAAAACAAAAD4AAAAIAAAACAAAAAgAAAA+AAAAfwAAHH8cAH9//wH////B////w////8P////j////4////+H////B////wP///4A///4AH//+AB///AAf//wAH//8AB///AAf//wAH//+AD///gAD/+AAAAAAA=' }
+  },
+  'ocean': {
+    p: { h: 0.747, w: 0.56, f: 0.254, m: 'AAAAAAAAAAAAA+AAAA/4AAAf+AAAH/wAAD/+AAA//gAAP/4AAD/8AAAf/AAAD/gAAAfwAAA//AAAf/8AAH//AAB//wAAB/AAAA/4AAAP+AAAH/gAAD/+AAA//gAAf/8AAP//gAH//8AD///gA///4AP//+AH///gB///8AAAAAA=' },
+    r: { h: 0.747, w: 0.627, f: 0.337, m: 'AAAAAAAAAAAD4+PgA+Pj4AP//+AD///gA///4AP//+AD///gAf//wAB//wAAP/4AAD/+AAA//gAAP/4AAD/+AAA//gAAP/4AAD/+AAA//gAAf/8AAP//gAD//4AB///AAf//wAH//8AB///AD///+A////gP///4D///+AAAAAA=' },
+    n: { h: 0.8, w: 0.813, f: 0.45, m: 'AAAAAAAAAAABAAAAAc4AAAH+AAAB/+AAAP/8AAD//wAB//+AA///wAP//+AD///wB///8Af///gP///4D////B////wf///8P/7//D/4//4/4P/+P8H//h/D//4Ph//+AA///gAf//4AP//+AD///gA///4AP//+AD///gAAAAA=' },
+    b: { h: 0.807, w: 0.813, f: 0.271, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAHAAAAD4AAAB/AAAA/4AAAf/AAAP/4AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAD/+AAA//AAAD/gAAB/4AAAf/AAAH/wAAD/+AAAP+AAGB/AwP////j//f/4f/3/8GHwfDAAAAAA=' },
+    q: { h: 0.807, w: 0.867, f: 0.406, m: 'AAAAAAAAAAAAAAAAAGHDAADz54AA8+eAPPHHnjxwhx48MYYePDHGHgwxxhgOOc44DjnOOAd7znAHf/9wB///8Af///AH///wA///4AP//+AD///gA///wAH//8AB///AAf//wAH//8AB///AAf//wAH//8AAf/8AAAAAAAAAAAA=' },
+    k: { h: 0.807, w: 0.83, f: 0.426, m: 'AAAAAAAAAAAAAIAAAACAAAAD4AAAA+AAAACAAAAAwAAAA+AAB/vv8A////gf///8P////j////4////+P////j////4////+P////h////wP///4A///4AH//+AB///AAf//wAH//8AB///gA///4AP//+AB///AAB/8AAAAAAA=' }
+  },
+  'icy_sea': {
+    p: { h: 0.747, w: 0.573, f: 0.269, m: 'AAAAAAAAAAAAA+AAAAfwAAAH8AAAD/gAAA/4AAAH8AAAB/AAAA/4AAAf/AAAP/4AAD/+AAA//gAAP/4AAD/+AAAf/AAAH/gAAD/+AAB//wAA//+AAf//wAH//8AB///AA///4AP//+AD///gB///8Af///AH///wB///8AAAAAA=' },
+    r: { h: 0.747, w: 0.627, f: 0.327, m: 'AAAAAAAAAAAD4+PgA+Pj4AP//+AD///gA///4AP//+AD///gAf//wAB//wAAP/4AAD/+AAA//gAAP/4AAD/+AAA//gAAP/4AAD/+AAA//gAAP/4AAD/+AAB//wAA//+AAf//wAH//8AB///AD///+A////gP///4D///+AAAAAA=' },
+    n: { h: 0.8, w: 0.813, f: 0.448, m: 'AAAAAAAAAAABAAAAAc4AAAH+AAAB/+AAAP/8AAD//wAB//+AA///wAP//+AD///wB///8Af///gP///4D////B////wf///8P////D/4//4/4P/+P8H//h/D//4Ph//+AA///gAf//4AP//+AD///gA///4AP//+AD///gAAAAA=' },
+    b: { h: 0.79, w: 0.807, f: 0.269, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAHAAAAD4AAAB/AAAA/4AAA//gAAP/4AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAD/+AAAf/AAAD/gAAA/4AAAf/AAAH/wAAD/+AAAP+AAfh/D8P////j//f/4f/z/8GHwfDAAAAAA=' },
+    q: { h: 0.807, w: 0.867, f: 0.404, m: 'AAAAAAAAAAAAAAAAAAHAAADz54AA8+eAPPHHnjzwhx48MIYePDHGHgwxxhgMOc44DjnOOAc7znAHP/5wB//+8Af///AH///wA///4AP//+AD///gA///4AH//8AB///AAf//wAH//8AB///AAf//wAP//8AA//+AAAAAAAAAAAA=' },
+    k: { h: 0.807, w: 0.833, f: 0.421, m: 'AAAAAAAAAAAAAIAAAACAAAAD4AAAA+AAAACAAAAAgAAAA+AAA/Pn4A////gf///8P////j////4////+P////j////4////+P////h////wP///4B///8AP//+AB///AAf//wAH//8AB///AAf//wAH//+AB///AAB/8AAAAAAA=' }
+  },
+  'glass': {
+    p: { h: 0.727, w: 0.527, f: 0.225, m: 'AAAAAAAAAAAAA+AAAAf4AAAP+AAAD/gAAB/8AAAf/AAAD/gAAA/4AAAP+AAAP/4AAD/+AAA//gAAB/AAAAfwAAAH8AAAB/AAAAfwAAAP+AAAD/gAAB/8AAA//gAB///AA///4AP//+AD///gA///4AP//+AD///gA///4AAAAAA=' },
+    r: { h: 0.733, w: 0.7, f: 0.388, m: 'AAAAAAAAAAAP4+P4D+fz+A////gP///4D///+A////gH///wA///4AH//8AA///AAP//wAD//8AA///AAP//wAD//8AA///AAP//wAD//8AA///AAP//wAH//8AD///gA///4AP///AP///4P////j////4////+P////gAAAAA=' },
+    n: { h: 0.813, w: 0.793, f: 0.459, m: 'AAAAAAAAAAAABwAAAAcAAADn+AAA//8AAP//gAB//8AA///gAP//8AH///AB///4A///+AP///gH///8B////A////wP///8H/5//B/8//4/+f/+P/f//h/n//4Pn//+Ax///gA///4Af//+AH///gB///4Af//+AH///AAAAAA=' },
+    b: { h: 0.847, w: 0.88, f: 0.345, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAPgAAAH8AAAD/gAAB/8AAA//gAAf/4AAH//AAD//wAA//8AAP//AAB//wAAf/4AAD/+AAAP+AAAH/wAAD/+AAB//wAAf/8AAB/8AA+H8fg////+P////h////wP/3/4CAYwCAAAAAA=' },
+    q: { h: 0.827, w: 0.873, f: 0.396, m: 'AAAAAAAAAAAAAAAAAAHAAAAD4AAcA+AMPAHAHjwBwB48AcAeHAHAHgwBwBgOA+A4Dz/+eA////gH///4B///8Af///AH///wB///8Af///AD///gAf//wAD//8AA//+AAP//gAD//8AB///AA///4AP//+AAf/8AAAAAAAAAAAA=' },
+    k: { h: 0.787, w: 0.82, f: 0.407, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAPgAAABwAAAA+AAAefzwAf///AP///4H////D////4////+P////j////4////+P////h////wf///8D///+AP//+AB///AAf//wAH//8AB///AAf//wAH//8AAf/8AAAfwAAAAAAA=' }
+  },
+  'wood': {
+    p: { h: 0.747, w: 0.56, f: 0.254, m: 'AAAAAAAAAAAAA+AAAA/4AAAf+AAAH/wAAD/8AAA//gAAP/4AAD/8AAAf/AAAD/gAAAfwAAA//AAAf/8AAH//AAB//wAAB/AAAA/4AAAP+AAAH/gAAD/+AAA//gAAf/8AAP//gAH//8AD///gA///4AP//+AH///gB///8AAAAAA=' },
+    r: { h: 0.747, w: 0.627, f: 0.338, m: 'AAAAAAAAAAAD4+PgA+Pj4AP//+AD///gA///4AP//+AD///gAf//wAB//wAAf/8AAD/+AAA//gAAP/4AAD/+AAA//gAAP/4AAD/+AAA//gAAf/8AAP//gAD//4AB///AAf//wAH//8AP///4D///+A////gP///4D///+AAAAAA=' },
+    n: { h: 0.8, w: 0.813, f: 0.45, m: 'AAAAAAAAAAABAAAAAc4AAAH+AAAB/+AAAP/8AAD//wAB//+AA///wAP//+AD///wB///8Af///gP///4D////B////wf///8P/7//D/4//4/4P/+P8H//h/D//4Ph//+AA///gAf//4AP//+AD///gA///4AP//+AD///gAAAAA=' },
+    b: { h: 0.807, w: 0.813, f: 0.27, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAHAAAAD4AAAB/AAAA/4AAAf/AAAP/4AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAD/+AAA//AAAD/gAAB/4AAAf/AAAH/wAAD/+AAAP+AAGB/AwP////j//f/4f/3/8GHwfDAAAAAA=' },
+    q: { h: 0.807, w: 0.867, f: 0.405, m: 'AAAAAAAAAAAAAAAAAGHDAADz54AA8+eAPPHHnjxwhx48MYYePDHGHgwxxhgOOc44DjnOOAd7znAHf/9wB///8Af///AH///wA///4AP//+AD///gA///wAH//8AB///AAf//wAH//8AB///AAf//wAH//8AAf/8AAAAAAAAAAAA=' },
+    k: { h: 0.807, w: 0.833, f: 0.426, m: 'AAAAAAAAAAAAAIAAAACAAAAD4AAAA+AAAACAAAAAwAAAA+AAB/vv8A////gf///8P////j////4////+P////j////4////+H////h////wP///4A///4AH//+AB///AAf//wAH//8AB///gA///4AP//+AB///AAB/8AAAAAAA=' }
+  },
+  'bases': {
+    p: { h: 0.75, w: 0.57, f: 0.27, m: 'AAAAAAAAAAAAA+AAAAfwAAAH+AAAD/gAAA/4AAAH+AAAB/AAAA/4AAAf/AAAP/4AAD/+AAA//gAAP/4AAD/+AAAf/AAAH/wAAD/+AAB//wAA//+AAf//wAH//8AB///gA///4AP//+AD///gB///8Af///AH///wB///8AAAAAA=' },
+    r: { h: 0.747, w: 0.627, f: 0.328, m: 'AAAAAAAAAAAD4+PgA+Pj4AP//+AD///gA///4AP//+AD///gAf//wAB//wAAP/4AAD/+AAA//gAAP/4AAD/+AAA//gAAP/4AAD/+AAA//gAAP/4AAD/+AAB//wAA//+AAf//wAH//8AB///AD///+A////gP///4D///+AAAAAA=' },
+    n: { h: 0.8, w: 0.813, f: 0.448, m: 'AAAAAAAAAAABAAAAAc4AAAH+AAAB/+AAAP/8AAD//wAB//+AA///wAP//+AD///wB///8Af///gP///4D////B////wf///8P/7//D/4//4/4P/+P8H//h/D//4Ph//+AA///gAf//4AP//+AD///gA///4AP//+AD///gAAAAA=' },
+    b: { h: 0.79, w: 0.807, f: 0.269, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAHAAAAD4AAAB/AAAA/4AAA//gAAP/4AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAD/+AAAf/AAAD/gAAA/4AAAf/AAAH/wAAD/+AAAP+AAfh/D8P////j//f/4f/3/8GHwfDAAAAAA=' },
+    q: { h: 0.807, w: 0.867, f: 0.403, m: 'AAAAAAAAAAAAAAAAAGHDAADz54AA8+eAPPHHnjzwhx48MIYePDHGHgwxxhgOOc44DjnOOAc7znAHP/5wB//+8Af///AH///wA///4AP//+AD///gA///4AH//8AB///AAf//wAH//8AB///AAf//wAP//8AA//+AAAAAAAAAAAA=' },
+    k: { h: 0.807, w: 0.83, f: 0.421, m: 'AAAAAAAAAAAAAIAAAACAAAAD4AAAA+AAAACAAAAAgAAAA+AAB/fn8A////gf///8P////j////4////+P////j////4////+P////h////wP///4B///8AP//+AB///AAf//wAH//8AB///AAf//wAH//+AB///AAB/8AAAAAAA=' }
+  },
+  'modern': {
+    p: { h: 0.59, w: 0.51, f: 0.168, m: 'AAAAAAAAAAAAA+AAAA/4AAAf+AAAH/wAAD/8AAA//gAAP/wAAB/8AAAf/AAAD/gAAA/wAAAP8AAAD/gAAB/8AAA//gAAP/4AAD/+AAA//gAAf/8AAP//AAH//8AD///gB///8Af///AP///4D///+A////gP///4D///+AAAAAA=' },
+    r: { h: 0.707, w: 0.587, f: 0.296, m: 'AAAAAAAAAAAAA+AAAfP34AP//+AD///gA///4AP//+AD///gA///4AH//8AB///AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//8AB///AAf//wAH//8AD///gA///4Af///AH///wB///8A////gP///4D///+AAAAAA=' },
+    n: { h: 0.773, w: 0.667, f: 0.325, m: 'AAAAAAAAAAAADAAAAA4AAAAOAAAAHwAAAD/wAAB//AAA//4AAP//AAD//4AB///AA///wAP//+AH///gD///4A/+/+AP/v/wD/j/8A/D//AHx//gA5//4AB//+AAf//gAH//8AD///AB///4Af//+AP///gD///4A///+AAAAAA=' },
+    b: { h: 0.797, w: 0.82, f: 0.314, m: 'AAAAAAAAAAAAAYAAAAPgAAAD4AAAB/AAAAfwAAAH8AAAD/gAAB/8AAA//gAAP/4AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAH//AAB//wAAP/4AAD/+AAAf/AAAH/4AP////j////4////+P////h////wf/3/8H/w//AAAAAA=' },
+    q: { h: 0.737, w: 0.793, f: 0.349, m: 'AAAAAAAAAAAAAAAAADweAAB+PwAAfj8AAH4/ABx+Pxw+PB4+Ph48Pj4+Pj4+Pj4+Hz9+fAe//vgH///wB///8AP//+AD///gA///4AH//8AB///AAf//wAD//4AB///AA///4AP//+AD///gB///8Af///AH///wAAAAAAAAAAA=' },
+    k: { h: 0.793, w: 0.72, f: 0.379, m: 'AAAAAAAAAAAAA8AAAAPgAAAD4AAAA+AAAAPAAADxx8AD+d/gB/+/8A/+//gf/3/8H////B////wf///8H////B////wP///4D///+Af///AD///gAf//wAH//8AB///AAf//wAP//+AD///gA///8Af///AH///wB///8AAAAAA=' }
+  },
+  'club': {
+    p: { h: 0.747, w: 0.477, f: 0.224, m: 'AAAAAAAAAAAAA+AAAA/4AAAf+AAAH/wAAB/8AAA//gAAP/4AAB/8AAAf/AAAH/gAAB/8AAA//gAAP/4AAB/8AAAH8AAAB/AAAA/wAAAP+AAAD/gAAB/8AAAf/AAAP/4AAH//AAH//8AB///AAf//wAH//8AA//8AAP//gAAAAAA=' },
+    r: { h: 0.747, w: 0.517, f: 0.311, m: 'AAAAAAAAAAAB9++AAffvgAH//4AB//+AAf//gAH//4AB//+AAP//AAA//gAAP/4AAD/+AAB//gAAf/8AAH//AAB//wAAf/8AAH//AAD//wAA//8AAP//gAD//4AA//+AAP//gAP//+AD///gA///wAH//8AA//+AAP//gAAAAAA=' },
+    n: { h: 0.78, w: 0.52, f: 0.326, m: 'AAAAAAAAAAAAPgAAAf/BgAH//8AB///AAf//wAH//8AB///AAf//wAH//4AA//AAAP/gAAD/4AAA//AAAP/8AAD//gAAf/8AAP//gAD//8AA///AAP//wAH//8AB//+AAH//AAD//4AB///AAf//wAH//4AAf/8AAH//AAAAAAA=' },
+    b: { h: 0.82, w: 0.487, f: 0.288, m: 'AAAAAAAAAAAAA8AAAAPgAAAD4AAAA8AAAAPgAAAH8AAAD/AAAB/sAAA/7AAAP94AAH/eAAB/nwAA/78AAP9/gAD//4AA//+AAP//gAD//4AA//+AAP//gAB//wAAf/8AAD/+AAD//4AA//+AAP//gAD//4AAf/8AAH//AAAAAAA=' },
+    q: { h: 0.82, w: 0.707, f: 0.335, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAAcAAAAHAAABD4QAA4+OAD///+Af///gH///wA///4AP//+AB///AAf//wAD//4AA//+AAP//gAB//4AAf/8AAH//AAB//wAAf/8AAH//AAB//wAA//+AAP//gAD//4AAf/8AAH//AAAAAAA=' },
+    k: { h: 0.873, w: 0.67, f: 0.388, m: 'AAAAAAAAAAAAA+AAAAPgAAAf/AAAH/wAAB/8AAAf/AAAH/wAAB/8AAAD4AAAP/4AAf//wAf///AH///wB///8Af///AD///gA///4AP//8AB///AAf//gAD//4AA//+AAH//AAB//wAA//+AAP//gAD//4AAf/4AAH/+AAAAAAA=' }
+  },
+  'metal': {
+    p: { h: 0.743, w: 0.48, f: 0.225, m: 'AAAAAAAAAAAAB+AAAA/4AAAf/AAAH/wAAD/8AAA//gAAP/4AAD/8AAAf/AAAH/gAAD/8AAA//gAAP/4AAB/8AAAH8AAAB/AAAAfwAAAP+AAAD/gAAB/8AAAf/AAAP/4AAH//AAH//8AB///AAf//wAH//8AA//8AAP//AAAAAAA=' },
+    r: { h: 0.747, w: 0.52, f: 0.311, m: 'AAAAAAAAAAAB88+AAfPPgAH//4AB//+AAf//gAH//4AB//+AAP//AAA//gAAP/4AAH/+AAB//gAAf/4AAH//AAB//wAAf/8AAH//AAB//wAA//8AAP//gAD//4AA//+AAP//gAP//+AD///AAf//wAH//8AA//+AAP//gAAAAAA=' },
+    n: { h: 0.787, w: 0.52, f: 0.329, m: 'AAAAAAAAAAAAPgAAAf6AAAH//8AB///AAf//wAH//8AB///AAf//wAD//4AA//AAAP/gAAD/4AAAf/AAAH/4AAB//gAAf/8AAH//gAB//8AA///AAP//wAD//4AB//+AAH//AAD//4AA//+AAP//gAD//4AAf/8AAH//AAAAAAA=' },
+    b: { h: 0.82, w: 0.487, f: 0.29, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA8AAAAPgAAAH8AAAD/AAAB/sAAA/7AAAP/4AAH/fAAB/3wAA/78AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAB//wAAf/8AAD/+AAD//4AA//+AAP//gAD//4AAf/8AAH//AAAAAAA=' },
+    q: { h: 0.82, w: 0.707, f: 0.337, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAAcAAAAHAAABD4QAA4+OAD///+Af///gH///wA///4AP//+AB///AAf//wAD//4AA//+AAP//gAB//4AAf/8AAH//AAB//wAAf/8AAH//AAD//4AA//+AAP//gAD//4AAf/8AAH//AAAAAAA=' },
+    k: { h: 0.873, w: 0.673, f: 0.39, m: 'AAAAAAAAAAAAA+AAAAPgAAAf/AAAH/wAAB/8AAAf/AAAH/wAAB/8AAAD4AAAf/8AAf//wAP///AH///wB///8AP///AD///gA///4AH//+AB///AAP//wAD//4AA//+AAH//AAB//wAA//+AAP//gAB//4AAf/8AAH//AAAAAAA=' }
+  },
+  'marble': {
+    p: { h: 0.807, w: 0.68, f: 0.298, m: 'AAAAAAAAAAAAA+AAAA/4AAAf+AAAH/wAAB/8AAAf/AAAH/wAAB/8AAAf/AAAD/gAAAfwAAB//wAAf/8AAD/+AAAf/AAAD/gAAA/4AAAP+AAAH/wAAD/+AAB//wAAf/8AAP//gAD//4AB///AB///8Af///AP///4D///+AAAAAA=' },
+    r: { h: 0.8, w: 0.68, f: 0.401, m: 'AAAAAAAAAAAB8+fAA/Pn4APz5+AD///gA///4AP//+AD///gA///4AH//8AA//+AAH//AAB//wAAf/8AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AD///gB///8A////gP///4D///+AAAAAA=' },
+    n: { h: 0.847, w: 0.687, f: 0.427, m: 'AAAAAAAAAAAAHgAAAB/AAAAP+AAAP/8AAD//AAB//wAAf/8AAP//gAH//8AD///AB///wAf//8AH///gB+H/4Afj//ABw//wAA//4AAf/8AAP//AAP//wAD//+AB///wAf//4AH//8AA//+AA///4Af///AH///wB///8AAAAAA=' },
+    b: { h: 0.847, w: 0.82, f: 0.341, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAHAAAAH8AAAD/gAAB/8AAA//gAAf/8AAH//AAD//4AA//+AAP//gAD//4AA//+AAP//gAB//wAAf/8AAD/+AAB//wAAf/8AAD/+AAAf/AAAD/gAH///+B////w//3/+P/4//gAAAAA=' },
+    q: { h: 0.887, w: 0.773, f: 0.394, m: 'AAAAAAAAAAAAAcAAAAPgAABD4QAA8+eAAfHHwADxx4AA8ceAADHGAA45zjgPOc54DznOeA8d3HgDn/zgAf//wAH//8AA//+AAP//gAB//wAAf/8AAD/+AAA//gAAP/4AAH//AAB//wAAP/4AA///4AP//+AH///wB///8AAAAAA=' },
+    k: { h: 0.907, w: 0.693, f: 0.406, m: 'AAAAAAAAAAAAAcAAAAfwAAAH8AAAB/AAAAfwAAABwAAAP/4AAf//gAP//+AH///wA///4AP//8AB///AAf//gAD//4AA//+AAH//AAB//gAAP/4AAD/+AAA//gAAP/wAAD/+AAB//gAAP/4AAf//wAP//+AH///gB///8AAAAAA=' }
+  },
+  'nature': {
+    p: { h: 0.72, w: 0.527, f: 0.194, m: 'AAAAAAAAAAAAAeAAAAPgAAAD8AAAA/AAAAPgAAABwAAAB/AAAD/+AAD//4AA///AAf//wAH//8AAA/AAAAPwAAAH8AAAB/AAAA/4AAAP+AAAH/wAAB/8AAAP/AAAD/gAAAfwAAAH8AAAf/8AAf//wAP//+AD///gA///4AAAAAA=' },
+    r: { h: 0.72, w: 0.627, f: 0.347, m: 'AAAAAAAAAAAHw+HwB8Ph8AfD4fAH///wB///8Af///AD///gAf//wAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAH//8AD///gA///4Af///AP///4D///+A////gP///4D///+AAAAAA=' },
+    n: { h: 0.807, w: 0.767, f: 0.411, m: 'AAAAAAAAAAAAAAAAABgAAABeAAAAf/AAAH/8AAB//wAAf/+AAP//wAD//+AB///gAf//8AP///AH///4B///+A////wf///8H////B/+//wf8P/8H+H//B/B//wBg//8AA///AAf//wAH//8AD///AA///wAP//8AD///AAAAAA=' },
+    b: { h: 0.793, w: 0.82, f: 0.335, m: 'AAAAAAAAAAAADjgAAA44AAAOOAAADjgAAA94AAAf/AAAP/4AAH//AAB//wAA//8AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AAf/8AAH//AAA//gAAf/4AAD/+AAA//gAf///8P////j//f/4//B/+IAAAAgAAAAA=' },
+    q: { h: 0.78, w: 0.847, f: 0.358, m: 'AAAAAAAAAAAAAAAAABwOAAA8HgAAPB8AADweAAAcHAAAHBwAAB48ADgePA48H34ePD9+Hh4//jwPv/74B///8Af///AH///wA///4AP//+AB///AAf//wAH//8AB///AAP//wAD//4AA//+AAP//gAB//wAAH/wAAAAAAAAAAAA=' },
+    k: { h: 0.8, w: 0.82, f: 0.442, m: 'AAAAAAAAAAAAB/AAAAfwAAAH8AAAB/AAAAfwAAf39/AP///4H/wf/B/+P/4//3/+P/9//j//f/4////+P////h////wf///8D///+Af///AD///gAf//wAH//8AB///AAf//wAH//8AB///AAf//wAD//4AAf/8AAA/4AAAAAAA=' }
+  },
+  'tigers': {
+    p: { h: 0.807, w: 0.68, f: 0.299, m: 'AAAAAAAAAAAAA+AAAA/4AAAf/AAAH/wAAB/8AAAf/AAAH/wAAB/8AAAf/AAAD/gAAD/+AAB//wAAf/8AAD/+AAAf/AAAD/gAAA/4AAAP+AAAH/wAAD/+AAB//wAA//8AAP//gAD//4AD///gB///8A////AP///4D///+AAAAAA=' },
+    r: { h: 0.803, w: 0.68, f: 0.403, m: 'AAAAAAAAAAAB8+fAAfPn4APz5+AD///gA///4AP//+AD///gA///4AH//8AA//+AAH//AAB//wAAf/8AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//8AD///gB///8A////gP///4D///+AAAAAA=' },
+    n: { h: 0.847, w: 0.687, f: 0.427, m: 'AAAAAAAAAAAAHgAAAB/AAAAP+AAAP/8AAD//AAB//wAAf/8AAP//gAH//8AD///AB///wAf//8AH///gB+H/4Afj//ABw//wAA//4AAf/8AAP//AAP//wAD//+AB///wAf//4AH//8AA//+AA///4Af///AH///wB///8AAAAAA=' },
+    b: { h: 0.847, w: 0.82, f: 0.341, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAHAAAAH8AAAD/gAAB/8AAA//gAAf/8AAH//AAD//4AA//+AAP//gAD//4AA//+AAP//gAB//wAAf/8AAD/+AAB//wAAf/8AAD/+AAAf/AAAD/gAH///+B////w//3/+P/4//gAAAAA=' },
+    q: { h: 0.887, w: 0.773, f: 0.393, m: 'AAAAAAAAAAAAAcAAAAPgAABD4QAA8+eAAfHHwADxx4AA8ceAADHGAA45zjgPOc54DznOeA8d3HgDn/zgAf//wAH//8AA//+AAP//gAB//wAAf/8AAD/+AAA//gAAP/4AAH//AAB//wAAP/4AA///4AP//+AH///wB///8AAAAAA=' },
+    k: { h: 0.907, w: 0.693, f: 0.407, m: 'AAAAAAAAAAAAAcAAAAfwAAAH8AAAB/AAAAfwAAABwAAAP/4AAf//wAP//+AH///wA///4AP//8AB///AAf//gAD//4AA//+AAH//AAB//wAAP/4AAD/+AAA//gAAP/4AAD/+AAB//gAAP/4AAf//wAP//+AH///gB///8AAAAAA=' }
+  },
+  'lolz': {
+    p: { h: 0.723, w: 0.58, f: 0.256, m: 'AAAAAAAAAAAAA+AAAAfwAAAH+AAAD/gAAAf4AAAH8AAAB/gAAB/8AAA//gAAP/4AAD/+AAA//gAAP/4AAD/+AAAf/AAAD/gAAB/8AAA//gAAf/+AAP//wAH//8AD///gA///4Af///AH///wB///8Af///AH///wB///8AAAAAA=' },
+    r: { h: 0.753, w: 0.693, f: 0.395, m: 'AAAAAAAAAAAH4+PwB+fj8Af///AH///wB///8Af///AD///gAf//wAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AA//+AAP//gAD//4AD///AA///4AP//+AD///gH////B////wf///8H////AAAAAA=' },
+    n: { h: 0.807, w: 0.793, f: 0.461, m: 'AAAAAAAAAAAABwAAAAcAAADn+AAA//8AAP//gAB//8AA///gAP//8AH///gB///4A///+AP///wH///8B////A////wf///8H/9//h/8//4/+f/+P/f//h/v//4fj//+Bx///gA///4Af//+AH///gB///4Af//+AH///AAAAAA=' },
+    b: { h: 0.853, w: 0.88, f: 0.347, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAPgAAAH8AAAD/gAAB/8AAA//gAAf/8AAH//AAD//wAA//+AAP//AAB//wAAP/4AAD/+AAAf+AAAH/wAAD/+AAB//wAAf/8AAB/8AB/H8fw////+P////h////wPf394CA4wCAAAAAA=' },
+    q: { h: 0.827, w: 0.873, f: 0.396, m: 'AAAAAAAAAAAAAAAAAAHAAAAD4AAcA+AMPAHAHjwBwB48AcAeHAHAHgwBwBgOA+A4Dz/+eA////gH///4B///8Af///AH///wB///8Af///AD///gAf//wAD//8AA//+AAP//gAD//8AB///AA///4AP//+AAf/8AAAAAAAAAAAA=' },
+    k: { h: 0.787, w: 0.82, f: 0.407, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAPgAAABwAAAA+AAAefzwAf///AP///4H////D////4////+P////j////4////+P////h////wf///8D///+AP//+AB///AAf//wAH//8AB///AAf//wAH//8AAf/8AAAfwAAAAAAA=' }
+  },
+  'graffiti': {
+    p: { h: 0.713, w: 0.593, f: 0.221, m: 'AAAAAAAAAAAAA+AAAAfwAAAP+AAAH/wAAB/8AAAf/AAAH/wAAA/4AAAP+AAAB/AAAAHAAAAAAAAAA+AAAAfwAAAP+AAAH/wAAB/8AAAf/gAAP/4AAD/+AAD//4AB///AA///4Af///AH///wB///+A////gP///4B///+AAAAAA=' },
+    r: { h: 0.713, w: 0.593, f: 0.32, m: 'AAAAAAAAAAAAA/AAA+fz4APn8+AD5/PgA///4AP//+AB///gAf//wAH//8AA//+AAH//gAB//4AA//+AAP//gAD//4AA//+AAP//gAD//4AA///AAP//wAH//8AB///AAf//wAP//+AH///wB///8A////gP///4D///+AAAAAA=' },
+    n: { h: 0.807, w: 0.687, f: 0.382, m: 'AAAAAAAAAAAADAAAAA4AAAAPgAAAH/gAAD/+AAB//wAAf/+AAP//wAD//+AB///gAf//8AP///AH///wD///8A/8//gP8f/4D8P/+AOH//gAD//wAB//8AA///AAP//wAD//8AB//+AA///wAP//+AD///gB///4Af//+AAAAAA=' },
+    b: { h: 0.807, w: 0.84, f: 0.31, m: 'AAAAAAAAAAAAAYAAAAPgAAAH4AAAB+AAAAPAAAAH0AAAD7gAAB+8AAA/vgAAP34AAH9/AAB/fwAAf38AAH//AAB//wAAf/8AAH//AAA//gAAH/wAAB/8AAAAAAAAH/wAAD/+AD////4////+P////j//f/wf/j/8H/wP/AAAAAA=' },
+    q: { h: 0.747, w: 0.807, f: 0.377, m: 'AAAAAAAAAAAAAAAAABwcAAA+PgAAP38AAD8/ABw+Phw+Hhw+Px48fj8ePH4+H3w+Hx98fA+ffvgH///wB///8AP///AD///gA///4AH//8AB///AAf//wAD//4AA//+AAP//gAH//8AD///gA///4AP//+AD///gAAAAAAAAAAA=' },
+    k: { h: 0.807, w: 0.787, f: 0.405, m: 'AAAAAAAAAAAAAcAAAAPgAAAD4AAAA+AAAAPgAAABwAAB8cfAB/yf8A/+v/gf/3/8H////D////4/P/5+P5/8/j/P+f4f5/P8H/f3/A////gH///wA///4AH//8AB///AAP//gAD//4AB///AA///4AP//+AD///gA///4AAAAAA=' }
+  },
+  '3d_plastic': {
+    p: { h: 0.887, w: 0.68, f: 0.444, m: 'AAAAAAAAAAAAB/AAAA/4AAAf/AAAH/wAAB/8AAA//gAAP/4AAD/+AAA//gAAf/8AAP//gAH//8AD///gA///4AP//+AH///wB///8Af///AH///wB///8Af///AH///wA///4AP//+AB///AAP//gAB//wAAP/4AAA/4AAAAAAA=' },
+    r: { h: 1, w: 0.72, f: 0.551, m: 'AAAAAAAAAAAAA+AAABPsAAA//gAAP/4AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAH/+AAA//gAAP/4AAH//AAD//4AB///AAf//wAP//+AD///gA///4AP//+AD///gA///4AP//+AD///gAf//wAH//8AA//+AAH//AAAAAAA=' },
+    n: { h: 0.973, w: 0.713, f: 0.59, m: 'AAAAAAAAAAAAB/+AAB//wAP//+AD///gA///4AH//+AB///AAf//wAH//AAB//4AAf//AAH//4AB///AAf//wAP//+AD///gA///4AP//+AD///gA///4AP//+AD///gA///4AH//8AB///AAP//gAB//wAAP/4AAA/4AAAAAAA=' },
+    b: { h: 1, w: 0.72, f: 0.523, m: 'AAAAAAAAAAAAA+AAAAfwAAAP+AAAH/wAAB/8AAAf/AAAH/4AAB/8AAAf/AAAH/wAAD/+AAA//gAAf/8AAP//gAH//8AB///AA///4AP//+AD///gA///4AP//+AD///gA///4AP//+AD///gAf//wAD//4AA//+AAD/+AAAAAAA=' },
+    q: { h: 0.993, w: 0.787, f: 0.583, m: 'AAAAAAAAAAAAA2AAAB/8AAAf/AAAP/4AAH/+AAB//wAAf/8AAH//AAA//gAAf/8AAH//AAB//wAAf/8AAH//AAD//4AB///AAf//wAP//+AD///gB///8Af///AH///wB///8Af///AH///wB///8Af///AH///wA///4AAAAAA=' },
+    k: { h: 1, w: 0.787, f: 0.598, m: 'AAAAAAAAAAAAB/AAAB/4AAA//gAAP/4AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAH//AAB//wAAf/8AAH//AAB//wAA//+AAf//wAP//+AD///gA///4Af///AH///wB///8Af///AH///wB///8Af///AH///wA///4AAAAAA=' }
+  },
+  '3d_staunton': {
+    p: { h: 0.9, w: 0.723, f: 0.47, m: 'AAAAAAAAAAAAA/AAAAf4AAAP/AAAH/4AAB/+AAAf/gAAP/4AAH//AAD//wAA//+AAP//wAD//+AB///gA///8AP///AH///wB///8Af///AH///wB///8Af///AH///wB///8AP//+AB///gAP//wAB//4AAH/8AAAf8AAAAAAA=' },
+    r: { h: 0.997, w: 0.763, f: 0.588, m: 'AAAAAAAAAAAAA/AAAAv0AAAf/gAAP/8AAD//AAA//wAAP/8AAP//AAH//wAB//8AAf//AAH//wAB//8AAf//gAD//8AA///AAf//4AP//+AD///gB///8Af///AH///wB///8Af///AD///gA///4AH//8AB///AAH//gAAAAAA=' },
+    n: { h: 0.977, w: 0.807, f: 0.63, m: 'AAAAAAAAAAAAA//gAA//8AH///AB///4Af//+AD///AA///wD///4Af//4AH//+AA///wAP//+AD///gA///8AP///AD///4A///+AP///gD///4A///+AP///gD///4A///8AH///AA///gAP//4AA//8AAH/+AAAf8AAAAAAA=' },
+    b: { h: 1, w: 0.76, f: 0.555, m: 'AAAAAAAAAAAAAeAAAAf4AAAP/AAAD/wAAB/+AAAf/gAAP/4AAH/+AAD//gAA//4AAP/+AAD//gAAf/+AAH//wAD//8AB///gAf//4AP//+AD///wA///8Af///AH///wA///8AP//+AD///gA///4AH//8AA///AAH//gAAAAAA=' },
+    q: { h: 0.987, w: 0.833, f: 0.622, m: 'AAAAAAAAAAAAAfAAAA/+AAAP/gAAP/8AAD//AAA//4AAP/+AAH//gAH//wAB//+AA///gAH//4AB//+AAf//gAH//8AB///gAf//4AP///AD///wB///+Af///gP///4D///+A////gP///4D///+A////gH///4B///8AAAAAA=' },
+    k: { h: 1, w: 0.83, f: 0.635, m: 'AAAAAAAAAAAAA/gAAA/8AAAf/gAAP/8AAD//AAB//4AAf/+AAH//gAD//4AB//8AA///gAP//4AD//+AAf//gAH//4AB///AAf//4AH//+AD///wA///8Af///AH///4B///+A////gP///4D///+A////gH///4B///8AAAAAA=' }
+  },
 };
-
 let tplCache = null;
-function templates() {
+function themeTemplates() {
   if (tplCache) return tplCache;
   tplCache = {};
-  for (const [type, t] of Object.entries(CC_TEMPLATES)) {
-    const bytes = atob(t.m);
-    const mask = new Uint8Array(NORM * NORM);
-    for (let i = 0; i < mask.length; i++) {
-      mask[i] = (bytes.charCodeAt(i >> 3) >> (7 - (i & 7))) & 1;
+  for (const [theme, types] of Object.entries(CC_THEMES)) {
+    tplCache[theme] = {};
+    for (const [type, t] of Object.entries(types)) {
+      const bytes = atob(t.m);
+      const mask = new Uint8Array(NORM * NORM);
+      for (let i = 0; i < mask.length; i++) mask[i] = (bytes.charCodeAt(i >> 3) >> (7 - (i & 7))) & 1;
+      tplCache[theme][type] = { ...t, mask };
     }
-    tplCache[type] = { ...t, mask };
   }
   return tplCache;
 }
@@ -865,21 +1004,54 @@ function iou(a, b) {
 }
 
 /**
- * Name a piece from its silhouette, with size as a tie-breaker.
- *
- * Shape carries most of the signal, but chess.com's set also varies in size -- a
- * pawn stands 0.69 of a square, a king 0.83 -- which is what separates the pairs
- * that silhouettes alone confuse. h/w/fill are all fractions of one square.
+ * Name one piece within a given theme's set. Shape carries most of the signal;
+ * size breaks the ties it cannot, since a pawn and a king differ in height.
  */
-function matchType(shape, h, w, fill) {
-  const ranked = Object.entries(templates())
+function matchIn(set, o) {
+  const ranked = Object.entries(set)
     .map(([type, t]) => [type,
-      iou(shape.mask, t.mask)
-      - Math.abs(h - t.h) * 0.55
-      - Math.abs(w - t.w) * 0.45
-      - Math.abs(fill - t.f) * 0.35])
+      iou(o.shape.mask, t.mask)
+      - Math.abs(o.h - t.h) * 0.55
+      - Math.abs(o.w - t.w) * 0.45
+      - Math.abs(o.fill - t.f) * 0.35])
     .sort((a, b) => b[1] - a[1]);
   return { type: ranked[0][0], score: ranked[0][1], margin: ranked[0][1] - ranked[1][1] };
+}
+
+/**
+ * Keep only the biggest blob of ink. chess.com paints file and rank labels inside
+ * the edge squares, and those digits would otherwise merge into whatever piece
+ * shares the square and deform the silhouette it is about to be judged on.
+ * Eight-connected, so a thin antialiased outline is not split by diagonal gaps.
+ */
+function largestBlob(mask, size) {
+  const label = new Int32Array(size * size).fill(-1);
+  const stack = [];
+  let bestId = -1, bestN = 0, id = 0;
+  for (let s = 0; s < mask.length; s++) {
+    if (!mask[s] || label[s] !== -1) continue;
+    let n = 0;
+    stack.push(s); label[s] = id;
+    while (stack.length) {
+      const i = stack.pop(); n++;
+      const x = i % size, y = (i / size) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+          const j = ny * size + nx;
+          if (mask[j] && label[j] === -1) { label[j] = id; stack.push(j); }
+        }
+      }
+    }
+    if (n > bestN) { bestN = n; bestId = id; }
+    id++;
+  }
+  const out = new Uint8Array(size * size);
+  if (bestId < 0) return out;
+  for (let i = 0; i < out.length; i++) if (label[i] === bestId) out[i] = 1;
+  return out;
 }
 
 /**
@@ -927,8 +1099,8 @@ function erodeCore(sil, size) {
 }
 
 function readCell(px, w, gx, gy, step, bg, hi, lo) {
-  // Only 3% inset: a chess.com king stands 0.83 of a square tall, so the old 13%
-  // sliced the crown off and wrecked the silhouette it was about to be judged on.
+  // Only 3% inset: a chess.com king stands 0.83 of a square tall, so a bigger one
+  // sliced the crown off the silhouette it was about to be judged on.
   const inset = Math.round(step * 0.03);
   const size = step - inset * 2;
   if (size < 8) return null;
@@ -940,20 +1112,29 @@ function readCell(px, w, gx, gy, step, bg, hi, lo) {
       const v = luma(px, ((gy + inset + y) * w + gx + inset + x) * 4);
       const i = y * size + x;
       L[i] = v;
-      // Ink contrasts with BOTH square colours; comparing only against this square
-      // loses a white piece on a light one (#fff vs #eeeed2 is 19 luma apart). The
-      // per-cell term uses this cell's own shade, so move highlights read as board.
+      // Ink contrasts with BOTH square colours; comparing only against the square
+      // underneath loses a pale piece on a pale square. On low-contrast boards the
+      // piece's own dark outline is often all that registers -- which is enough,
+      // because the flood fill below turns that outline back into a solid shape.
       if (v > hi + 8 || v < lo - 8 || Math.abs(v - bg) > 45) { mask[i] = 1; ink++; }
     }
   }
-  if (ink / (size * size) < 0.05) return { empty: true };
+  if (!ink) return { empty: true };
 
-  const sil = fillSilhouette(mask, size);
+  // Drop coordinate labels and stray marks, then close the shape. On a low-contrast
+  // board only the piece's own outline may have registered as ink; flood-filling it
+  // is what turns that ring back into the solid silhouette the templates expect.
+  const sil = fillSilhouette(largestBlob(mask, size), size);
+  // Median brightness of the piece's core, with its outline eroded away. Which side
+  // of white/black that lands on is decided later, across the whole board: a set's
+  // "white" pieces can be darker than the board they stand on (chess.com's shaded
+  // pieces on a pale board sit at ~181 against a board midpoint of 223), so any
+  // fixed threshold gets it wrong. The pieces in one screenshot all come from one
+  // set, so they cluster -- and the image itself says where the boundary is.
   const core = erodeCore(sil, size);
   const vote = core.count ? core.mask : sil;
-  const mid = (hi + lo) / 2;
-  let bright = 0, dark = 0;
-  for (let i = 0; i < vote.length; i++) if (vote[i]) (L[i] > mid ? bright++ : dark++);
+  const lums = [];
+  for (let i = 0; i < vote.length; i++) if (vote[i]) lums.push(L[i]);
 
   let x0 = size, y0 = size, x1 = -1, y1 = -1, area = 0;
   for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (sil[y * size + x]) {
@@ -961,11 +1142,34 @@ function readCell(px, w, gx, gy, step, bg, hi, lo) {
     if (x < x0) x0 = x; if (x > x1) x1 = x;
     if (y < y0) y0 = y; if (y > y1) y1 = y;
   }
-  const { type, margin } = matchType(
-    normalizeMask(sil, size, size),
-    (y1 - y0 + 1) / step, (x1 - x0 + 1) / step, area / (step * step));
+  if (area / (size * size) < 0.06) return { empty: true };   // a lone coordinate label
 
-  return { empty: false, color: bright > dark ? 'w' : 'b', type, margin };
+  return {
+    empty: false,
+    core: lums.length ? median(lums) : (hi + lo) / 2,
+    shape: normalizeMask(sil, size, size),
+    h: (y1 - y0 + 1) / step, w: (x1 - x0 + 1) / step, fill: area / (step * step),
+  };
+}
+
+/**
+ * Where does white end and black begin? Two-means over the pieces' core brightness.
+ * Both kings are always on the board, so both colours are always present, and the
+ * split is read off this screenshot rather than assumed from the board's shade.
+ * Returns null when the pieces are too uniform to separate honestly.
+ */
+function splitColours(cores) {
+  const min = Math.min(...cores), max = Math.max(...cores);
+  if (max - min < 25) return null;
+  let a = min, b = max;
+  for (let k = 0; k < 12; k++) {
+    const A = [], B = [];
+    for (const v of cores) (Math.abs(v - a) <= Math.abs(v - b) ? A : B).push(v);
+    if (!A.length || !B.length) break;
+    a = A.reduce((s, v) => s + v, 0) / A.length;
+    b = B.reduce((s, v) => s + v, 0) / B.length;
+  }
+  return (a + b) / 2;
 }
 
 /** Locate the board at a given scale. */
@@ -1000,23 +1204,48 @@ function readBoardImage(img) {
   const bg = [median(parity[0]), median(parity[1])];
   const hi = Math.max(bg[0], bg[1]), lo = Math.min(bg[0], bg[1]);
 
+  const cells = [];
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cellBg = ringLuma(px, w, originX(c), originY(r), cs);
+      const cell = readCell(px, w, originX(c), originY(r), cs, cellBg, hi, lo);
+      cells.push(cell && !cell.empty ? cell : null);
+    }
+  }
+  const seen = cells.filter(Boolean);
+  if (!seen.length) throw new Error('found a board but no pieces on it');
+
+  const cut = splitColours(seen.map((o) => o.core));
+  const boundary = cut == null ? (hi + lo) / 2 : cut;
+  for (const o of seen) o.color = o.core > boundary ? 'w' : 'b';
+
+  // Which piece set is this? Score every theme against every piece we found and
+  // keep the set that explains them best. Guessing one theme is how this failed
+  // before: templates built from `neo` cannot name a `sky` king.
+  let best = null;
+  for (const [name, set] of Object.entries(themeTemplates())) {
+    const picks = seen.map((o) => matchIn(set, o));
+    const avg = picks.reduce((t, m) => t + m.score, 0) / picks.length;
+    if (!best || avg > best.avg) best = { name, avg, picks };
+  }
+  seen.forEach((o, i) => { o.type = best.picks[i].type; o.margin = best.picks[i].margin; });
+
   const rows = [];
   const shaky = [];
   for (let r = 0; r < 8; r++) {
     let row = '';
     let gap = 0;
     for (let c = 0; c < 8; c++) {
-      const cellBg = ringLuma(px, w, originX(c), originY(r), cs);
-      const cell = readCell(px, w, originX(c), originY(r), cs, cellBg, hi, lo);
-      if (!cell || cell.empty) { gap++; continue; }
+      const o = cells[r * 8 + c];
+      if (!o) { gap++; continue; }
       if (gap) { row += gap; gap = 0; }
-      row += cell.color === 'w' ? cell.type.toUpperCase() : cell.type;
-      if (cell.margin < 0.05) shaky.push(FILES[c] + (8 - r));    // near-tie between types
+      row += o.color === 'w' ? o.type.toUpperCase() : o.type;
+      if (o.margin < 0.05) shaky.push(FILES[c] + (8 - r));
     }
     if (gap) row += gap;
     rows.push(row);
   }
-  return { placement: rows.join('/'), shaky };
+  return { placement: rows.join('/'), shaky, theme: best.name };
 }
 
 /**
@@ -1365,7 +1594,7 @@ async function importImage(file) {
       img.onerror = () => rej(new Error('could not decode that image'));
       img.src = url;
     });
-    const { placement, shaky } = readBoardImage(img);
+    const { placement, shaky, theme } = readBoardImage(img);
     const kings = { w: (placement.match(/K/g) || []).length, b: (placement.match(/k/g) || []).length };
     if (kings.w !== 1 || kings.b !== 1) {
       throw new Error(`read ${kings.w} white and ${kings.b} black kings — that's a misread`);
@@ -1375,7 +1604,7 @@ async function importImage(file) {
     shotPending.placement = placement;
     previewShot(placement, $('shot-turn').value, $('shot-view').value);
     showShotButtons(true);
-    shotStatus('read it — confirm below');
+    shotStatus(`read it (${theme} pieces) — confirm below`);
     if (shaky.length) {
       $('shot-warn').hidden = false;
       $('shot-warn').textContent = `Unsure about ${shaky.join(', ')} (as drawn) — check those squares before using this.`;

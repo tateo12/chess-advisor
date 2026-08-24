@@ -47,9 +47,11 @@ Drop a chess.com screenshot on the import card (or click it, or press Ctrl/Cmd+V
 the position is read off the image, shown on the board for you to check, and only then
 loaded. Everything runs in the tab -- no model, no API key, no upload.
 
-It is tuned for **chess.com's default piece set on mobile**. The six silhouettes are
-baked into the HTML as 32x32 bitmasks, 128 bytes each -- about 768 bytes total, matched
-against the real artwork rather than guessed from Unicode glyphs.
+It handles **18 of chess.com's piece themes**. Each set's six silhouettes are baked in
+as 32x32 bitmasks, 128 bytes each -- about 24 KB in total, matched against the real
+artwork rather than guessed from Unicode glyphs. Which theme a screenshot uses is worked
+out from the screenshot: every theme is scored against every piece found, and the set
+that explains them best wins.
 
 How it works, in order:
 
@@ -64,15 +66,24 @@ How it works, in order:
    ones -- comparing against only *this* square loses a white piece on a light one. The
    ink is flood-filled into a solid silhouette, which is both what the templates look like
    and where the piece's real colour lives, clear of its own outlines.
-4. **Name it** by silhouette overlap, with height/width/fill as tie-breakers.
+4. **Discard coordinate labels.** chess.com paints file and rank digits inside the edge
+   squares; keeping only the largest blob of ink stops them deforming the piece they
+   share a square with.
+5. **Decide colour relatively.** A set's "white" pieces can be *darker* than the board
+   they stand on -- chess.com's shaded pieces sit near luma 181 on a pale blue board
+   whose midpoint is 223 -- so no fixed threshold works. All the pieces in one
+   screenshot come from one set, so their core brightness falls into two clusters and
+   two-means reads the boundary off the image itself.
+6. **Name it** by silhouette overlap, with height/width/fill as tie-breakers.
 
 Three things an image cannot tell you, so the UI asks instead of guessing: whose **turn**
 it is, which **side the board is drawn from** (chess.com puts your own colour at the
 bottom), and **castling rights** -- placement is geometry, castling is history. Anything
 the classifier was unsure about is listed so you can check it before confirming.
 
-Known limits: it expects chess.com's default pieces, and a photo of a physical wooden
-board is a different and much harder problem that this does not attempt.
+Known limits: an unlisted piece theme falls back to the closest-looking one, which is
+usually still right but is worth checking on the preview; and a photo of a physical
+wooden board is a different and much harder problem that this does not attempt.
 
 ## Credits and licensing
 
