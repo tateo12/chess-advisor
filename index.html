@@ -1054,7 +1054,26 @@ function rotatePlacement(placement) {
  * Return a FEN castling field: some combination of "KQkq", or "-" for none.
  */
 function inferCastling(placement) {
-  // TODO(human)
+  // Grant a right when the king and that rook are both still home. This is the
+  // usual convention (it matches what an analysis board assumes), and it is a
+  // guess: a king that moved and came back looks identical from here. Erring this
+  // way means the engine can see a castle that exists; erring the other way would
+  // silently hide one. Rights are always consistent with the placement, so the
+  // FEN stays legal either way.
+  const rows = placement.split('/')
+    .map((row) => [...row].map((ch) => (/\d/.test(ch) ? '.'.repeat(Number(ch)) : ch)).join(''));
+  const rank1 = rows[7] || '';        // rank 8 comes first, so rank 1 is last
+  const rank8 = rows[0] || '';
+  let rights = '';
+  if (rank1[4] === 'K') {             // file e
+    if (rank1[7] === 'R') rights += 'K';
+    if (rank1[0] === 'R') rights += 'Q';
+  }
+  if (rank8[4] === 'k') {
+    if (rank8[7] === 'r') rights += 'k';
+    if (rank8[0] === 'r') rights += 'q';
+  }
+  return rights || '-';
 }
 
 /* ---------------- engine ---------------- */
